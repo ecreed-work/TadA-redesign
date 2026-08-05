@@ -4,6 +4,7 @@ all, which would have emptied a shortlist after real GPU spend."""
 import numpy as np
 import pytest
 
+from tada_redesign import constants
 from tada_redesign import score_structure as ss
 
 
@@ -82,6 +83,46 @@ def test_cleft_clearance_is_large_when_the_pocket_is_open():
 def test_cleft_clearance_detects_a_closed_cleft():
     """A substrate atom placed on top of a design atom (in the ref frame) must
     come back as a sub-Angstrom clearance after superposition."""
+    ref = _synthetic_atoms()
+    pred = _transformed(ref, _rotation(20.0), np.array([4.0, 4.0, 4.0]))
+    on_top = np.array([ref[(3, "CB")] + np.array([0.3, 0.0, 0.0])])
+    assert ss.cleft_clearance(ref, pred, on_top) == pytest.approx(0.3, abs=1e-6)
+
+
+def _substrate_xyz():
+    """8AZ (the target-base analogue) coordinates from 6VPC chain D."""
+    from Bio.PDB import PDBParser
+    model = PDBParser(QUIET=True).get_structure("x", constants.PDB6VPC)[0]
+    res = next(r for r in model[constants.SUBSTRATE_CHAIN]
+               if r.get_resname().strip() == constants.SUBSTRATE_RESNAME)
+    return np.array([a.get_coord() for a in res])
+
+
+def test_cleft_clearance_excludes_the_catalytic_metal_by_default():
+    """The Zn contacts the target base at ~2.12 A as correct catalytic geometry.
+    Counting it made a correctly-placed metal read as a collapsed cleft."""
+    raw = ss.heavy_atoms_from_pdb(constants.CHAINF_RAW)
+    az = _substrate_xyz()
+    with_zn = ss.cleft_clearance(raw, raw, az, exclude_atom_names=())
+    without_zn = ss.cleft_clearance(raw, raw, az)
+    assert with_zn == pytest.approx(2.121, abs=0.01)
+    assert without_zn == pytest.approx(2.330, abs=0.01)
+    assert without_zn > with_zn
+
+
+def test_both_relaxed_parents_clear_their_own_cleft_gate():
+    """A gate the unmodified parent cannot pass is a broken gate."""
+    raw = ss.heavy_atoms_from_pdb(constants.CHAINF_RAW)
+    az = _substrate_xyz()
+    for parent, pdb in constants.PARENT_PDB.items():
+        clearance = ss.cleft_clearance(raw, ss.heavy_atoms_from_pdb(pdb), az)
+        assert clearance > constants.CLEFT_CLEARANCE_MARGIN, parent
+        assert clearance == pytest.approx({"TadA8e": 2.211, "TadA9": 2.271}[parent],
+                                          abs=0.01)
+
+
+def test_cleft_clearance_still_catches_a_protein_clash():
+    """Excluding the metal must not blind the gate to a real collapse."""
     ref = _synthetic_atoms()
     pred = _transformed(ref, _rotation(20.0), np.array([4.0, 4.0, 4.0]))
     on_top = np.array([ref[(3, "CB")] + np.array([0.3, 0.0, 0.0])])

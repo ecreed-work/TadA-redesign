@@ -76,8 +76,15 @@ SCREEN_PLDDT_MARGIN = 0.05       # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
 SCREEN_MOTIF_RMSD_MAX = 1.5      # A, looser: reduced sampling is noisier
 FINAL_MOTIF_RMSD_MAX = 1.0       # A, full sampling / AF3
 SCREEN_SURVIVORS = 2000          # compute decision; the dropped count is logged
-CLEFT_CLEARANCE_MIN = 2.2        # A from any mapped 8AZ atom to any design
-                                 # heavy atom; below this the cleft has closed
+# Cleft openness is gated RELATIVE to the parent's own measured clearance, not
+# against an absolute floor. Measured on the committed references with the Zn
+# excluded (8AZ = 6VPC chain D 26): TadA8e 2.211 A, TadA9 2.271 A, and the
+# crystal chain F 2.330 A (closest protein atom Arg111:NH1). Native substrate
+# H-bonds sit at 2.2-2.4 A, so an absolute 2.2 A floor left 0.011 A of headroom
+# on TadA8e and FAILED the crystal parent outright once the catalytic Zn was
+# counted -- the Zn contacts the target base at 2.12 A by design. A design
+# passes when its clearance is no worse than its parent's by more than this.
+CLEFT_CLEARANCE_MARGIN = 0.3     # Angstrom, vs the parent's own measurement
 
 AF3_TOP_N = 200
 AF3_CONTROL_N = 100              # stratified across the full Rosetta range,

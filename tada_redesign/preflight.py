@@ -51,7 +51,8 @@ def _zn_geometry_check():
     duplicating the thresholds -- it is pure Biopython/numpy, so this runs
     without PyRosetta.
     """
-    sys.path.insert(0, constants.TADA_STABILITY)
+    if constants.TADA_STABILITY not in sys.path:
+        sys.path.insert(0, constants.TADA_STABILITY)
     try:
         from tada_stability.relax_scaffolds import check_zn_geometry
     except ImportError as exc:

@@ -49,7 +49,7 @@ def apply_transform(X, R, P_mean, Q_mean):
 
 
 def _element_of(atom_name, type_symbol=None):
-    if type_symbol:
+    if type_symbol and type_symbol.strip():
         return type_symbol.strip().upper()
     return atom_name.strip()[0].upper()
 
@@ -163,7 +163,8 @@ def motif_rmsd(ref_atoms, pred_atoms, residues, anchor_residues=None):
     return float(np.sqrt(np.mean(np.sum((ref_xyz - pred_xyz) ** 2, axis=1))))
 
 
-def cleft_clearance(ref_atoms, pred_atoms, substrate_xyz, anchor_residues=None):
+def cleft_clearance(ref_atoms, pred_atoms, substrate_xyz, anchor_residues=None,
+                    exclude_atom_names=(constants.ZN_RESNAME,)):
     """Minimum distance (A) from any substrate atom to any design heavy atom.
 
     `substrate_xyz` is in the REFERENCE frame (the crystal 8AZ coordinates).
@@ -173,11 +174,22 @@ def cleft_clearance(ref_atoms, pred_atoms, substrate_xyz, anchor_residues=None):
     base must sit in, i.e. the substrate cleft closed. This is the specific
     failure the tetrad-only MIN arm is exposed to, since nothing but the
     substrate context holds that cleft open during design.
+
+    `exclude_atom_names` defaults to excluding the catalytic Zn. The metal
+    coordinates the target base at ~2.12 A as a matter of correct catalytic
+    geometry, not a clash -- counting it makes a correctly-placed metal read
+    as a collapsed cleft and rewards designs that lose it. Measured on the
+    committed references (8AZ = 6VPC chain D residue 26): the crystal
+    `chainF_raw.pdb` measured against itself gives 2.121 A with the Zn
+    counted (closest atom the Zn itself), versus 2.330 A for the closest
+    protein atom, Arg111:NH1, once the Zn is excluded.
     """
     P, Q = _anchor_arrays(ref_atoms, pred_atoms, anchor_residues)
     R, P_mean, Q_mean = kabsch(P, Q)
 
-    keys = sorted(pred_atoms)
+    keys = sorted(k for k in pred_atoms if k[1] not in set(exclude_atom_names))
+    if not keys:
+        raise ValueError("no design atoms left to measure after exclusions")
     pred_xyz = apply_transform(np.array([pred_atoms[k] for k in keys]),
                                R, P_mean, Q_mean)
     sub = np.atleast_2d(np.asarray(substrate_xyz, dtype=float))
