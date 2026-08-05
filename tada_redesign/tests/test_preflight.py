@@ -85,3 +85,24 @@ def test_main_returns_zero_when_all_checks_pass(monkeypatch):
         preflight, "run_checks",
         lambda: [preflight.Check("fake", True, "fine")])
     assert preflight.main() == 0
+
+
+def test_known_bad_pdb_check_still_catches_a_runtime_module(tmp_path):
+    """The tests/ exclusion must not neuter the check: a non-test module
+    naming the Zn-stripped structure is still a failure."""
+    (tmp_path / "some_stage.py").write_text(
+        "PDB = '/x/6vpc_dCas9_TadA8e.pdb'\n")
+    c = preflight._known_bad_pdb_check(package_dir=str(tmp_path),
+                                       tests_dir=str(tmp_path / "tests"))
+    assert c.ok is False
+    assert "some_stage.py" in c.detail
+
+
+def test_known_bad_pdb_check_ignores_a_test_module(tmp_path):
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_thing.py").write_text(
+        "assert '6vpc_dCas9_TadA8e.pdb' in KNOWN_BAD\n")
+    c = preflight._known_bad_pdb_check(package_dir=str(tmp_path),
+                                       tests_dir=str(tests))
+    assert c.ok is True

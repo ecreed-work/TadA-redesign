@@ -78,13 +78,32 @@ def _esmfold_ligand_support_check():
     return Check("ESMFold2 ligand support", ok, path)
 
 
-def _known_bad_pdb_check():
-    """The Zn-stripped 6VPC file must appear nowhere in this package."""
+_TESTS_DIR = os.path.join(_THIS_PACKAGE, "tests")
+
+
+def _known_bad_pdb_check(package_dir=None, tests_dir=None):
+    """The Zn-stripped 6VPC file must appear nowhere in this package's RUNTIME
+    modules.
+
+    Two deliberate exclusions, each of which must name the file precisely for
+    this check to exist at all:
+      - `constants.py`, which records the path as `KNOWN_BAD_PDB`.
+      - `tests/`, whose `test_constants.py` asserts that literal as a positive
+        control. A test naming the file in an assertion is not a pipeline
+        module reading it as input, which is the failure this check guards.
+
+    Parameterized so the exclusions themselves are testable -- an over-broad
+    exclusion would silently neuter the check, which is worse than no check.
+    """
+    package_dir = package_dir or _THIS_PACKAGE
+    tests_dir = os.path.abspath(tests_dir or _TESTS_DIR)
     needle = os.path.basename(constants.KNOWN_BAD_PDB)
     hits = []
-    for py in glob.glob(os.path.join(_THIS_PACKAGE, "**", "*.py"), recursive=True):
+    for py in glob.glob(os.path.join(package_dir, "**", "*.py"), recursive=True):
         if os.path.basename(py) == "constants.py":
-            continue          # constants records it precisely so this check can run
+            continue
+        if os.path.abspath(py).startswith(tests_dir + os.sep):
+            continue
         if needle in open(py).read():
             hits.append(py)
     return Check("known-bad PDB not referenced", not hits,
