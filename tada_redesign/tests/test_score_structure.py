@@ -170,3 +170,27 @@ def test_heavy_atoms_from_cif_reads_the_atom_site_loop(tmp_path):
     assert (57, "HA") not in atoms
     assert (201, "ZN") in atoms
     assert np.allclose(atoms[(57, "CA")], [1.0, 2.0, 3.0])
+
+
+def test_metal_xyz_finds_the_zn_on_a_foreign_chain(tmp_path):
+    """RFD3 returns the Zn on a relabelled chain; a chain-scoped reader misses it
+    and every donor distance silently becomes nan."""
+    cif = tmp_path / "m.cif"
+    cif.write_text(
+        "data_t\nloop_\n_atom_site.group_PDB\n_atom_site.type_symbol\n"
+        "_atom_site.label_atom_id\n_atom_site.auth_comp_id\n_atom_site.auth_asym_id\n"
+        "_atom_site.auth_seq_id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n_atom_site.Cartn_z\n"
+        "ATOM   C  CA ALA F 57 1.000 2.000 3.000\n"
+        "HETATM ZN ZN ZN  B 161 4.000 5.000 6.000\n")
+    assert ss.heavy_atoms_from_cif(str(cif), chain="F").get((161, "ZN")) is None
+    assert np.allclose(ss.metal_xyz(str(cif)), [4.0, 5.0, 6.0])
+
+
+def test_metal_xyz_returns_none_when_absent(tmp_path):
+    cif = tmp_path / "n.cif"
+    cif.write_text(
+        "data_t\nloop_\n_atom_site.group_PDB\n_atom_site.type_symbol\n"
+        "_atom_site.label_atom_id\n_atom_site.auth_comp_id\n_atom_site.auth_asym_id\n"
+        "_atom_site.auth_seq_id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n_atom_site.Cartn_z\n"
+        "ATOM   C  CA ALA F 57 1.000 2.000 3.000\n")
+    assert ss.metal_xyz(str(cif)) is None

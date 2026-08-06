@@ -114,6 +114,14 @@ def test_columns_are_stable_and_include_the_cell():
         assert col in fb.COLUMNS
 
 
+def test_zn_donor_distances_honours_an_explicit_metal_position():
+    """The real path supplies the metal from a chain-agnostic lookup."""
+    atoms = _linear_backbone()
+    del atoms[(201, "ZN")]                       # not in the chain-scoped dict
+    d = fb.zn_donor_distances(atoms, zn_xyz=np.array([0.0, 0.0, 0.0]))
+    assert all(v == pytest.approx(2.2) for v in d.values())
+
+
 def test_backbone_id_survives_a_float_in_the_cell_name():
     """Two models of one cell must get DISTINCT ids; `split(".")[0]` collided them."""
     a = fb.backbone_id("/x/cell_TadA8e_FULL_pt1.0_TadA8e_FULL_pt1.0_0_model_0.cif.gz")

@@ -15,6 +15,8 @@ reference and design.
 Honesty ceiling: an intact motif geometry in a predicted model is not evidence
 of catalytic activity. Nothing in this module measures function.
 """
+import os
+
 import numpy as np
 
 from . import constants
@@ -113,6 +115,50 @@ def heavy_atoms_from_cif(path, chain=None):
         atoms[(int(resids[i]), names[i].strip())] = np.array(
             [float(xs[i]), float(ys[i]), float(zs[i])])
     return atoms
+
+
+def metal_xyz(path, resname="ZN"):
+    """Coordinates of the single metal ion, found by IDENTITY not by chain.
+
+    RFD3's AtomWorks loader relabels a hetero atom's chain when it shared a
+    chain letter with protein residues on input -- measured 2026-08-05: the Zn
+    comes back on asym id `B` while the protein is elsewhere. Every chain-scoped
+    reader therefore misses it, which silently turns all Zn-donor distances into
+    nan. Returns None when absent; raises ValueError on more than one match, so
+    an unexpectedly multi-metal input fails loudly instead of picking one.
+    """
+    hits = []
+    if path.endswith((".pdb", ".ent")):
+        for line in open(path):
+            if line.startswith(("ATOM", "HETATM")) and line[17:20].strip() == resname:
+                hits.append(np.array([float(line[30:38]), float(line[38:46]),
+                                      float(line[46:54])]))
+    else:
+        opener = __import__("gzip").open if path.endswith(".gz") else open
+        import tempfile
+        if path.endswith(".gz"):
+            import shutil
+            with tempfile.NamedTemporaryFile(suffix=".cif", delete=False) as tmp:
+                with opener(path, "rb") as src:
+                    shutil.copyfileobj(src, tmp)
+                cif_path = tmp.name
+        else:
+            cif_path = path
+        try:
+            from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+            d = MMCIF2Dict(cif_path)
+            comp = d.get("_atom_site.auth_comp_id") or d.get("_atom_site.label_comp_id")
+            xs, ys, zs = (d["_atom_site.Cartn_x"], d["_atom_site.Cartn_y"],
+                          d["_atom_site.Cartn_z"])
+            for i, name in enumerate(comp):
+                if name.strip() == resname:
+                    hits.append(np.array([float(xs[i]), float(ys[i]), float(zs[i])]))
+        finally:
+            if path.endswith(".gz"):
+                os.unlink(cif_path)
+    if len(hits) > 1:
+        raise ValueError(f"{path}: expected one {resname}, found {len(hits)}")
+    return hits[0] if hits else None
 
 
 def ca_map(atoms):

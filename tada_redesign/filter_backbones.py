@@ -84,9 +84,15 @@ def max_ca_break(atoms):
     return worst
 
 
-def zn_donor_distances(atoms):
-    """{"zn_57ND1": distance, ...}; nan for a donor or Zn that is absent."""
-    zn = next((v for (resnum, name), v in atoms.items() if name == "ZN"), None)
+def zn_donor_distances(atoms, zn_xyz=None):
+    """{"zn_57ND1": distance, ...}; nan for a donor or Zn that is absent.
+
+    `zn_xyz` is supplied by the caller when the metal was located
+    chain-agnostically (RFD3 relabels its chain); otherwise the metal is looked
+    up in `atoms`, which is how synthetic fixtures supply it.
+    """
+    zn = zn_xyz if zn_xyz is not None else next(
+        (v for (resnum, name), v in atoms.items() if name == "ZN"), None)
     out = {}
     for resnum, name in ZN_DONORS:
         key = f"zn_{resnum}{name}"
@@ -118,7 +124,11 @@ def evaluate(cif_path, ref_atoms, residues, cell):
 
     ca = score_structure.ca_map(atoms)
     n_res = len(ca)
-    zn = zn_donor_distances(atoms)
+    try:
+        zn_xyz = score_structure.metal_xyz(cif_path)
+    except (OSError, ValueError):
+        zn_xyz = None
+    zn = zn_donor_distances(atoms, zn_xyz)
     break_max = max_ca_break(atoms)
     lo, hi = constants.LENGTH_RANGE
     zlo, zhi = constants.ZN_DONOR_RANGE
