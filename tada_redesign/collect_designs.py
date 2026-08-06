@@ -14,10 +14,20 @@ A sequence containing `:` means LigandMPNN emitted more than one designed chain
 That would corrupt every downstream length and RMSD measurement, so it raises
 rather than being silently accepted.
 
+The degraded-run refusal is gated against an EXPECTED design count derived
+from the manifest (backbones x sequences-per-backbone from `constants`), never
+against `len(fastas)`: that count is ~20x the number of fastas by design (each
+fasta holds one input record plus many designs), so comparing rows written to
+fastas found can never trip the refusal -- losing most of the LigandMPNN array
+would still read `is_degraded: false`. Comparing against the manifest-derived
+expectation catches that: fewer designs than the manifest promises, however
+they were lost, drops the count below the fraction.
+
 Honesty ceiling: a confidence value here is LigandMPNN's own sequence score. It
 is not a stability measurement and not evidence of function.
 """
 import argparse
+import collections
 import glob
 import os
 
@@ -82,6 +92,25 @@ def design_id(backbone, tag, mpnn_id):
     return f"{backbone}__{tag}__{mpnn_id}"
 
 
+def seqs_per_backbone():
+    """Designs one submitted array grid produces per backbone: one biased
+    sequence per (temperature, seed) plus the zero-bias control(s)."""
+    return len(constants.MPNN_TEMPS) * constants.SEQS_PER_TEMP + \
+        constants.CONTROL_SEQS_PER_BACKBONE
+
+
+def n_expected_designs(manifest_rows):
+    """Manifest backbones x `seqs_per_backbone()`, grouped by arm.
+
+    Not `len(fastas) * seqs_per_backbone()`: a whole missing fasta (a dead
+    LigandMPNN array task) must LOWER the count relative to this, not track
+    it -- comparing to the fasta count instead is exactly what let losing 6 of
+    10 LigandMPNN tasks still report `is_degraded: false`.
+    """
+    per_arm = collections.Counter(r["arm"] for r in manifest_rows)
+    return sum(n * seqs_per_backbone() for n in per_arm.values())
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     sub_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -89,8 +118,10 @@ def main(argv=None):
         sub_dir, "outputs", constants.RUN_DIR_NAME))
     args = ap.parse_args(argv)
 
-    manifest = {r["backbone"]: r for r in io.read_tsv(
-        os.path.join(args.run_dir, "mpnn_in", "mpnn_manifest.tsv"))}
+    manifest_rows = io.read_tsv(
+        os.path.join(args.run_dir, "mpnn_in", "mpnn_manifest.tsv"))
+    manifest = {r["backbone"]: r for r in manifest_rows}
+    n_expected = n_expected_designs(manifest_rows)
     out_path = os.path.join(args.run_dir, "designs.tsv")
     if os.path.exists(out_path):
         os.unlink(out_path)
@@ -127,9 +158,10 @@ def main(argv=None):
 
     for fasta in skipped:
         print(f"[collect_designs] WARNING no manifest row for {fasta}; skipped")
-    print(f"[collect_designs] {n_rows} designs from {len(fastas)} fastas -> {out_path}")
-    provenance.write(args.run_dir, "collect_designs", len(fastas), n_rows,
-                     extra={"skipped_fastas": skipped})
+    print(f"[collect_designs] {n_rows} designs from {len(fastas)} fastas "
+          f"({n_expected} expected from the manifest) -> {out_path}")
+    provenance.write(args.run_dir, "collect_designs", n_expected, n_rows,
+                     extra={"skipped_fastas": skipped, "n_fastas": len(fastas)})
     return 0
 
 

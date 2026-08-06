@@ -1,7 +1,10 @@
 """Every gate here is a cheap CPU check standing between RFD3's output and the
 much more expensive sequence-design and folding stages."""
+import json
+
 import numpy as np
 import pytest
+import yaml
 
 from tada_redesign import constants, filter_backbones as fb, motif, score_structure as ss
 from tada_redesign import io as tio
@@ -90,6 +93,31 @@ def test_evaluate_rejects_a_displaced_zn(monkeypatch):
     assert row["status"] == "zn_displaced"
 
 
+def test_evaluate_reports_metal_missing_when_no_zn_is_found(monkeypatch):
+    """Absence of the Zn is a MEASUREMENT failure, not a geometry verdict --
+    it must not read as `zn_displaced`, the same shape as a real rejection."""
+    ref = _linear_backbone()
+    no_zn = dict(ref)
+    del no_zn[(201, "ZN")]
+    monkeypatch.setattr(fb, "load_backbone", lambda path: no_zn)
+    monkeypatch.setattr(fb.score_structure, "metal_xyz", lambda path: None)
+    row = fb.evaluate("x.cif.gz", ref, (5, 6, 7), "cell")
+    assert row["status"] == "metal_missing"
+
+
+def test_evaluate_reports_metal_ambiguous_on_more_than_one_zn(monkeypatch):
+    """`metal_xyz` raises ValueError on >1 match; that must not fall through
+    to the same nan-driven `zn_displaced` a real geometric rejection uses."""
+    ref = _linear_backbone()
+    monkeypatch.setattr(fb, "load_backbone", lambda path: dict(ref))
+
+    def boom(path):
+        raise ValueError("expected one ZN, found 2")
+    monkeypatch.setattr(fb.score_structure, "metal_xyz", boom)
+    row = fb.evaluate("x.cif.gz", ref, (5, 6, 7), "cell")
+    assert row["status"] == "metal_ambiguous"
+
+
 def test_evaluate_passes_a_good_backbone(monkeypatch):
     ref = _linear_backbone()
     monkeypatch.setattr(fb, "load_backbone", lambda path: dict(ref))
@@ -149,3 +177,103 @@ def test_main_derives_the_cell_from_the_directory_not_the_filename(tmp_path, mon
     assert rows[0]["parent"] == "TadA8e" and rows[0]["arm"] == "FULL"
     assert rows[0]["partial_t"] == "1.0"
     assert rows[0]["status"] == "ok"
+
+
+def test_main_low_pass_rate_with_every_row_written_is_not_degraded(tmp_path, monkeypatch):
+    """A rejection is a measurement, not a stage failure: `partial_t=6`'s
+    poor yield is an EXPECTED result of this stage and must not itself trip
+    the same refusal meant to catch a broken measurement."""
+    run = tmp_path / "run"
+    cell = "TadA8e_FULL_pt6.0"
+    cell_dir = run / "rfd" / cell
+    cell_dir.mkdir(parents=True)
+    n = 5
+    for i in range(n):
+        (cell_dir / f"cell_{cell}_{cell}_0_model_{i}.cif.gz").write_bytes(b"")
+
+    short = _linear_backbone(n=40)     # fails length_out_of_range, every time
+    monkeypatch.setattr(fb, "load_backbone", lambda path: dict(short))
+    monkeypatch.setattr(fb.score_structure, "heavy_atoms_from_pdb",
+                        lambda path, chain=None: dict(short))
+    monkeypatch.setattr(fb.motif, "load_masks", lambda: {})
+    monkeypatch.setattr(fb.motif, "arm_residues", lambda arm, masks: (5, 6, 7))
+
+    assert fb.main(["--run-dir", str(run)]) == 0
+    out_path = run / "backbones.tsv"
+    assert out_path.exists()                       # canonical path, NOT renamed
+    assert not (run / "backbones.degraded.tsv").exists()
+    rows = tio.read_tsv(str(out_path))
+    assert len(rows) == n
+    assert all(r["status"] == "length_out_of_range" for r in rows)
+
+    doc = json.load(open(run / "filter_backbones.provenance.json"))
+    assert doc["is_degraded"] is False
+    assert doc["n_in"] == n and doc["n_out"] == n
+    assert doc["extra"]["n_passed"] == 0
+    assert doc["extra"]["pass_rate"] == 0.0
+
+
+def test_main_a_genuine_row_loss_still_triggers_degraded(tmp_path, monkeypatch):
+    """An input that produced NO row -- a write failure -- is the actual
+    signal the degraded refusal exists for, unlike a low pass rate."""
+    run = tmp_path / "run"
+    cell = "TadA8e_FULL_pt1.0"
+    cell_dir = run / "rfd" / cell
+    cell_dir.mkdir(parents=True)
+    for i in range(2):
+        (cell_dir / f"cell_{cell}_{cell}_0_model_{i}.cif.gz").write_bytes(b"")
+
+    atoms = _linear_backbone()
+    monkeypatch.setattr(fb, "load_backbone", lambda path: dict(atoms))
+    monkeypatch.setattr(fb.score_structure, "heavy_atoms_from_pdb",
+                        lambda path, chain=None: dict(atoms))
+    monkeypatch.setattr(fb.motif, "load_masks", lambda: {})
+    monkeypatch.setattr(fb.motif, "arm_residues", lambda arm, masks: (5, 6, 7))
+
+    real_append = fb.io.append_row
+
+    def flaky_append(path, row, columns):
+        if "model_1" in row["backbone"]:
+            raise OSError("disk full")
+        return real_append(path, row, columns)
+    monkeypatch.setattr(fb.io, "append_row", flaky_append)
+
+    assert fb.main(["--run-dir", str(run)]) == 0
+    assert not (run / "backbones.tsv").exists()
+    degraded_path = run / "backbones.degraded.tsv"
+    assert degraded_path.exists()
+    rows = tio.read_tsv(str(degraded_path))
+    assert len(rows) == 1
+
+    doc = json.load(open(run / "filter_backbones.provenance.json"))
+    assert doc["is_degraded"] is True
+    assert doc["n_in"] == 2 and doc["n_out"] == 1
+
+
+def test_main_warns_when_an_expected_cell_produced_no_files_at_all(
+        tmp_path, monkeypatch, capsys):
+    """A cell whose RFD3 array task died contributes zero files and never
+    appears in per_cell -- the ZERO-survivor warning must still fire, driven
+    by the EXPECTED cells in `rfd_in/rfd_inputs.yaml`, never by whatever the
+    glob happened to find."""
+    run = tmp_path / "run"
+    present_cell = "TadA8e_FULL_pt1.0"
+    missing_cell = "TadA8e_FULL_pt6.0"
+    cell_dir = run / "rfd" / present_cell
+    cell_dir.mkdir(parents=True)
+    (cell_dir / f"cell_{present_cell}_{present_cell}_0_model_0.cif.gz").write_bytes(b"")
+    rfd_in = run / "rfd_in"
+    rfd_in.mkdir(parents=True)
+    yaml.safe_dump({present_cell: {}, missing_cell: {}},
+                   open(rfd_in / "rfd_inputs.yaml", "w"))
+
+    atoms = _linear_backbone()
+    monkeypatch.setattr(fb, "load_backbone", lambda path: dict(atoms))
+    monkeypatch.setattr(fb.score_structure, "heavy_atoms_from_pdb",
+                        lambda path, chain=None: dict(atoms))
+    monkeypatch.setattr(fb.motif, "load_masks", lambda: {})
+    monkeypatch.setattr(fb.motif, "arm_residues", lambda arm, masks: (5, 6, 7))
+
+    assert fb.main(["--run-dir", str(run)]) == 0
+    out = capsys.readouterr().out
+    assert f"WARNING {missing_cell}: ZERO backbones present" in out

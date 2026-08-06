@@ -23,6 +23,21 @@ make_rfd_inputs_brace.py docstrings before touching this file):
   - The DNA context is chain D only. Chain C has nothing within 12 A of the
     target base (measured), and a smaller fixed context matters: an earlier
     campaign OOM'd an 80 GB A100 by handing RFD3 the whole Cas9 context.
+  - RFD3 CONSUMES chain D but does NOT EMIT it. `select_hotspots` reads it
+    for pocket orientation and RFD3 accepts the spec (job 233862, exit 0),
+    but partial diffusion's re-noise-in-place is protein-only by construction:
+    measured 2026-08-05, input `TadA8e.pdb` has 139 chain-D atoms (including
+    the 8AZ) and the output `.cif.gz` has 1227 rows -- 1226 protein + 1 Zn,
+    ZERO DNA. `write_input_pdb` still writes chain D (needed for the hotspots
+    to resolve), and this is a deliberate design decision, not a defect to
+    patch here: partial diffusion barely perturbs the motif in the first
+    place (`motif_rmsd` 0.036-0.057 A at `partial_t=1.0`, measured), so a
+    cleft cannot collapse by that little during diffusion. Where the missing
+    substrate DOES matter is sequence design -- an unoccupied groove reads to
+    LigandMPNN as unsatisfied surface to pack with hydrophobics -- so the
+    substrate is grafted back onto the designed backbone in
+    `prep_mpnn_inputs.py`, by superposition, rather than carried through
+    diffusion. See that module's docstring.
 
 Honesty ceiling: this module writes input files. It makes no claim that the
 resulting backbones fold, bind, or catalyse anything.
@@ -66,7 +81,22 @@ def write_input_pdb(parent, out_path, pdb6vpc=None):
 
 
 def build_spec(parent, arm, partial_t, masks, input_pdb):
-    """One RFD3 partial-diffusion InputSpecification."""
+    """One RFD3 partial-diffusion InputSpecification.
+
+    This deliberately does NOT try to make the DNA survive diffusion.
+    `unindex` looked viable at the `DesignInputSpecification.build()` layer
+    (a CPU-only call glued 6 DT/DC tokens onto their own chain with no
+    error), but the full inference pipeline's `UnindexFlaggedTokens`
+    transform (`rfd3/transforms/conditioning_base.py::expand_unindexed_motifs`)
+    hard-asserts `token.is_protein.all()` on anything unindexed and raises
+    `AssertionError: Cannot unindex non-protein token` -- confirmed by a real
+    RFD3 debug run (job 233942, exit 1) before this was reverted. Retaining
+    a nucleic-acid chain through RFD3 partial diffusion is not available
+    without changing the model's own conditioning code, which is out of
+    scope. See the module docstring for the design decision this led to:
+    the substrate is grafted onto the designed backbone in
+    `prep_mpnn_inputs.py` instead of carried through diffusion.
+    """
     return {
         "input": input_pdb,
         "partial_t": float(partial_t),

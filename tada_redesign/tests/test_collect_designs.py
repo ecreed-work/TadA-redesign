@@ -1,9 +1,11 @@
 """The FASTA's FIRST record is the input sequence, not a design. Counting it
 would inflate the design set by one per backbone and put a non-design into
 scoring."""
+import json
+
 import pytest
 
-from tada_redesign import collect_designs as cd
+from tada_redesign import collect_designs as cd, io as tio
 
 FASTA = (
     ">bb1, T=0.15, seed=111, num_res=156, num_ligand_res=8, "
@@ -65,3 +67,33 @@ def test_columns_carry_the_full_cell_coordinates():
                 "temperature", "bias", "sequence", "seq_len",
                 "overall_confidence", "ligand_confidence", "seq_rec"):
         assert col in cd.COLUMNS
+
+
+def test_n_expected_designs_is_manifest_backbones_times_seqs_per_backbone():
+    rows = [{"arm": "FULL"}] * 3 + [{"arm": "MIN"}] * 2
+    assert cd.n_expected_designs(rows) == 5 * cd.seqs_per_backbone()
+
+
+def test_main_flags_degraded_when_most_of_the_manifest_has_no_fasta(tmp_path):
+    """`n_rows` is ~20x `len(fastas)` by design (one fasta holds many design
+    records), so comparing rows written to fastas found can never trip the
+    refusal even if most of the LigandMPNN array died -- comparing against
+    the manifest-derived expectation must."""
+    run = tmp_path / "run"
+    mpnn_in = run / "mpnn_in"
+    mpnn_in.mkdir(parents=True)
+    manifest_rows = [{"backbone": f"bb{i}", "cell": "TadA8e_FULL_pt1.0",
+                      "parent": "TadA8e", "arm": "FULL",
+                      "pdb_path": f"/x/bb{i}.pdb"} for i in range(10)]
+    tio.write_tsv(str(mpnn_in / "mpnn_manifest.tsv"), manifest_rows,
+                  ("backbone", "cell", "parent", "arm", "pdb_path"))
+    # Only ONE of the 10 backbones' fastas actually exists: 9 of 10 LigandMPNN
+    # tasks are effectively lost.
+    seqs_dir = run / "lmpnn" / "FULL" / "T0.1" / "seqs"
+    seqs_dir.mkdir(parents=True)
+    (seqs_dir / "bb0.fa").write_text(FASTA)
+
+    assert cd.main(["--run-dir", str(run)]) == 0
+    doc = json.load(open(run / "collect_designs.provenance.json"))
+    assert doc["is_degraded"] is True
+    assert doc["n_in"] == 10 * cd.seqs_per_backbone()

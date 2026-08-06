@@ -3,8 +3,18 @@
 # (arm, temperature) plus the zero-bias control, using LigandMPNN's *_multi JSON
 # flags so a single process designs every backbone of that arm.
 #   --array=1-10   (2 arms x (4 temperatures + 1 control))
-# The Zn and ssDNA context ride inside each backbone PDB; LigandMPNN reads
-# non-protein atoms as ligand context.
+# NBATCH (sequences/backbone) applies to the BIASED tasks only. The control
+# tasks always use CONTROL_SEQS_PER_BACKBONE (1) regardless of NBATCH, so the
+# control set stays sized to match the biased backbone set 1:1 rather than
+# scaling with whatever NBATCH the biased submission used.
+# The catalytic Zn and the ssDNA substrate both ride inside each backbone PDB
+# by the time this script runs; LigandMPNN reads both as ligand context. The
+# Zn survives RFD3 partial diffusion as-is; the ssDNA does NOT (RFD3 consumes
+# it for hotspot orientation but never emits it -- measured) and is grafted
+# onto each backbone by `prep_mpnn_inputs.py::graft_substrate` via
+# superposition before these PDBs are ever written. Verified 2026-08-06 on a
+# real RFD3 debug backbone (chain F 1226 atoms, chain B 1 Zn, chain D 139 DNA
+# atoms including the 8AZ target base, all present in the grafted PDB).
 # Structural design only -- no base-editing function is implied.
 #SBATCH --job-name=tada_lmpnn
 #SBATCH --partition=gpu
@@ -47,9 +57,15 @@ OUT="$RUN/lmpnn/$ARM/$TAG"
 BIAS_ARGS=()
 if [ "$BIASED" = "1" ]; then
   BIAS_ARGS=(--bias_AA_per_residue_multi "$IN/bias.json")
+  N_SEQS="$NBATCH"
+else
+  # The control set must stay sized 1:1 with the backbone set, NOT scale with
+  # whatever NBATCH the biased submission used (constants.CONTROL_SEQS_PER_BACKBONE
+  # is never read otherwise, and NBATCH's default of 5 would 5x the controls).
+  N_SEQS=$(python3 -c "from tada_redesign import constants; print(constants.CONTROL_SEQS_PER_BACKBONE)")
 fi
 
-echo "[lmpnn] arm=$ARM tag=$TAG T=$T biased=$BIASED nbatch=$NBATCH host=$(hostname) gpu=${CUDA_VISIBLE_DEVICES:-?}"
+echo "[lmpnn] arm=$ARM tag=$TAG T=$T biased=$BIASED n_seqs=$N_SEQS host=$(hostname) gpu=${CUDA_VISIBLE_DEVICES:-?}"
 python3 "$SUB/tada_redesign/_run_ligandmpnn.py" \
   --model_type ligand_mpnn \
   --checkpoint_ligand_mpnn "$CKPT" \
@@ -59,7 +75,7 @@ python3 "$SUB/tada_redesign/_run_ligandmpnn.py" \
   --out_folder "$OUT" \
   --temperature "$T" \
   --batch_size 1 \
-  --number_of_batches "$NBATCH" \
+  --number_of_batches "$N_SEQS" \
   --seed "$SEED" \
   --save_stats 1 \
   --verbose 0

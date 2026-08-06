@@ -41,6 +41,9 @@ def test_spec_fixes_the_arm_motif_and_the_zn_by_ccd_name(masks):
     assert fixed[constants.ZN_RESNAME] == "ALL"
     assert "F201" not in fixed
     assert spec["ligand"] == constants.ZN_RESNAME
+    # RFD3 does not retain a nucleic-acid chain through partial diffusion
+    # (measured -- see build_spec's docstring): no DNA key belongs here.
+    assert "unindex" not in spec
 
 
 def test_spec_aims_hotspots_at_the_retained_flanking_nucleotides(masks):

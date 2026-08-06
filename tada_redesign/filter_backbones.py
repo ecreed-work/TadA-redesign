@@ -14,7 +14,15 @@ threshold from the design spec:
 Rejection counts are printed PER CELL. A cell whose every backbone failed must
 be visible as a zero, not merely absent from the results -- that is how a broken
 partial_t level or arm gets noticed before the next stage runs on a silently
-truncated set.
+truncated set. A cell that never even appears (its RFD3 array task died before
+writing any file) gets the SAME warning: expected cells are enumerated from
+`rfd_in/rfd_inputs.yaml`, never inferred from whatever the glob happened to find.
+
+The degraded-run refusal (`provenance.output_path`) is gated on ROWS WRITTEN
+vs backbones ATTEMPTED, never on the PASS RATE: `partial_t=6`'s poor yield is
+an expected, reportable RESULT of this stage, not a failure of this stage, and
+must not itself trip the same refusal meant to catch a broken measurement. The
+pass rate is still recorded, in `extra.n_passed` / `extra.pass_rate`.
 
 Honesty ceiling: passing these gates means the backbone is geometrically sane
 and still carries its active-site motif. It says nothing about function.
@@ -25,6 +33,7 @@ import glob
 import os
 
 import numpy as np
+import yaml
 
 from . import constants, io, motif, provenance, score_structure
 
@@ -114,7 +123,15 @@ def _row(backbone, cell, path, **kw):
 
 def evaluate(cif_path, ref_atoms, residues, cell):
     """One `backbones.tsv` row. Never raises: an unreadable file becomes a
-    failed row so a single bad file cannot kill the shard."""
+    failed row so a single bad file cannot kill the shard.
+
+    `metal_xyz` is a MEASUREMENT step, not a geometry gate: it can fail to
+    identify the Zn at all (absent, or the file itself unreadable -- either
+    way `zn_xyz` ends up None) or find more than one and raise `ValueError`.
+    Neither is the same defect as a correctly-identified Zn sitting too far
+    from its donors, so each gets its own status rather than falling through
+    to the same nan-driven `zn_displaced` a real geometric rejection uses.
+    """
     backbone = backbone_id(cif_path)
     try:
         atoms = load_backbone(cif_path)
@@ -124,9 +141,17 @@ def evaluate(cif_path, ref_atoms, residues, cell):
 
     ca = score_structure.ca_map(atoms)
     n_res = len(ca)
+    zn_ambiguous = False
     try:
         zn_xyz = score_structure.metal_xyz(cif_path)
-    except (OSError, ValueError):
+    except ValueError as exc:
+        # `metal_xyz`'s ONLY intentional ValueError is the ">1 match" guard
+        # ("expected one {resname}, found {n}"); anything else (e.g. an
+        # empty/corrupt file raising "Empty file.") is an unrelated parse
+        # failure, not evidence of a second Zn, so it falls back like OSError.
+        zn_xyz = None
+        zn_ambiguous = "expected one" in str(exc)
+    except OSError:
         zn_xyz = None
     zn = zn_donor_distances(atoms, zn_xyz)
     break_max = max_ca_break(atoms)
@@ -146,6 +171,10 @@ def evaluate(cif_path, ref_atoms, residues, cell):
         status = "chain_break"
     elif rmsd > constants.BACKBONE_MOTIF_RMSD_MAX:
         status = "motif_drift"
+    elif zn_ambiguous:
+        status = "metal_ambiguous"
+    elif all(np.isnan(v) for v in zn.values()):
+        status = "metal_missing"
     elif any(np.isnan(v) or not (zlo <= v <= zhi) for v in zn.values()):
         status = "zn_displaced"
     else:
@@ -174,6 +203,7 @@ def main(argv=None):
     per_cell = collections.defaultdict(collections.Counter)
     paths = sorted(glob.glob(os.path.join(args.run_dir, args.rfd_subdir, "*", "*.cif.gz")))
 
+    n_written = 0
     for path in paths:
         # RFD3 names outputs <yaml-stem>_<group>_<batch>_model_<n>.cif.gz and cell
         # ids embed a float, so the cell comes from the per-cell output DIRECTORY,
@@ -185,25 +215,47 @@ def main(argv=None):
                 constants.RMSD_REFERENCE[parent])
         residues = motif.arm_residues(arm, masks)
         row = evaluate(path, ref_cache[parent], residues, cell)
-        io.append_row(out_path, row, COLUMNS)
+        try:
+            io.append_row(out_path, row, COLUMNS)
+        except Exception as exc:                  # noqa: BLE001 - deliberate
+            # A row this stage COMPUTED but could not WRITE is a genuine
+            # loss -- distinct from a computed row whose status is a
+            # rejection, which is a measurement, not a loss.
+            print(f"[filter_backbones] WARNING failed to write row for "
+                  f"{path}: {exc}")
+            continue
+        n_written += 1
         counts[row["status"]] += 1
         per_cell[cell][row["status"]] += 1
 
     n_ok = counts["ok"]
-    for cell in sorted(per_cell):
+    yaml_path = os.path.join(args.run_dir, "rfd_in", "rfd_inputs.yaml")
+    expected_cells = (sorted(yaml.safe_load(open(yaml_path)))
+                      if os.path.exists(yaml_path) else sorted(per_cell))
+    for cell in expected_cells:
+        if cell not in per_cell:
+            print(f"[filter_backbones] WARNING {cell}: ZERO backbones present "
+                  f"(no RFD3 output found for this cell)")
+            continue
         detail = ", ".join(f"{k}={v}" for k, v in sorted(per_cell[cell].items()))
         print(f"[filter_backbones] {cell}: {detail}")
         if not per_cell[cell]["ok"]:
             print(f"[filter_backbones] WARNING {cell}: ZERO backbones passed")
-    print(f"[filter_backbones] {n_ok}/{len(paths)} passed -> {out_path}")
+    pass_rate = (n_ok / n_written) if n_written else 0.0
+    print(f"[filter_backbones] {n_ok}/{n_written} passed -> {out_path}")
 
-    final, degraded = provenance.output_path(out_path, len(paths), n_ok)
+    # Degraded is a ROW-WRITE failure (an attempted backbone that produced no
+    # row), never a low PASS RATE: partial_t=6's poor yield is an expected,
+    # reportable result of this stage, not a defect in it.
+    final, degraded = provenance.output_path(out_path, len(paths), n_written)
     if degraded:
         os.rename(out_path, final)
         print(f"[filter_backbones] DEGRADED: >{constants.DEGRADED_FRACTION:.0%} "
-              f"of backbones failed; wrote {final} instead of the canonical path")
-    provenance.write(args.run_dir, "filter_backbones", len(paths), n_ok,
-                     extra={"per_cell": {c: dict(v) for c, v in per_cell.items()}})
+              f"of attempted backbones produced no row; wrote {final} instead "
+              f"of the canonical path")
+    provenance.write(args.run_dir, "filter_backbones", len(paths), n_written,
+                     extra={"per_cell": {c: dict(v) for c, v in per_cell.items()},
+                            "n_passed": n_ok, "pass_rate": round(pass_rate, 4)})
     return 0
 
 
