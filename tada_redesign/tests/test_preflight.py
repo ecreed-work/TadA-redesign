@@ -9,6 +9,8 @@ monkeypatched subprocess, and for real by the Step 5 live run.
 """
 import subprocess
 
+import pytest
+
 from tada_redesign import preflight
 
 
@@ -106,3 +108,33 @@ def test_known_bad_pdb_check_ignores_a_test_module(tmp_path):
     c = preflight._known_bad_pdb_check(package_dir=str(tmp_path),
                                        tests_dir=str(tests))
     assert c.ok is True
+
+
+@pytest.mark.slow
+def test_env_probes_cover_all_five_envs():
+    """A gate that checks 2 of 5 envs lets a batch die on `import rfd3` after
+    reporting green."""
+    from tada_redesign import constants
+    names = {c.name for c in preflight.run_checks(with_env_probes=True)}
+    for env, module in constants.ENV_MODULES:
+        assert f"conda env '{env}' has {module}" in names
+
+
+def test_rmsd_reference_check_is_present_and_passes():
+    checks = {c.name: c for c in preflight.run_checks(with_env_probes=False)}
+    assert "RMSD reference completeness" in checks
+    assert checks["RMSD reference completeness"].ok is True
+
+
+def test_require_green_raises_when_a_check_fails(monkeypatch):
+    monkeypatch.setattr(preflight, "run_checks",
+                        lambda **kw: [preflight.Check("bad", False, "nope")])
+    with pytest.raises(SystemExit) as excinfo:
+        preflight.require_green(with_env_probes=False)
+    assert "bad" in str(excinfo.value)
+
+
+def test_require_green_returns_quietly_when_all_pass(monkeypatch):
+    monkeypatch.setattr(preflight, "run_checks",
+                        lambda **kw: [preflight.Check("fine", True, "ok")])
+    assert preflight.require_green(with_env_probes=False) is None

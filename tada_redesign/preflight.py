@@ -111,6 +111,36 @@ def _known_bad_pdb_check(package_dir=None, tests_dir=None):
                  "clean" if not hits else f"referenced in {hits}")
 
 
+def _rmsd_reference_check():
+    """Every FULL-arm heavy atom must exist in every RMSD reference.
+
+    `motif_rmsd` raises KeyError on a missing measured atom -- correct behaviour,
+    but if the REFERENCE is the incomplete structure then every design fails at
+    once, after the folds are already paid for. The crystal chainF_raw.pdb is
+    exactly such a structure (missing nine FULL-arm sidechain atoms at Arg153 and
+    Asn157), which is why RMSD_REFERENCE is the relaxed parents.
+    """
+    from . import motif, score_structure
+    try:
+        masks = motif.load_masks()
+    except (OSError, ValueError, KeyError) as exc:
+        return Check("RMSD reference completeness", False, f"masks unreadable: {exc}")
+    residues = set(motif.arm_residues(motif.ARM_FULL, masks))
+    problems = []
+    for parent, pdb in constants.RMSD_REFERENCE.items():
+        if not os.path.exists(pdb):
+            problems.append(f"{parent}: missing {pdb}")
+            continue
+        atoms = score_structure.heavy_atoms_from_pdb(pdb)
+        present = {resnum for resnum, _ in atoms}
+        absent = sorted(residues - present)
+        if absent:
+            problems.append(f"{parent}: no atoms for residues {absent}")
+    return Check("RMSD reference completeness", not problems,
+                 "all FULL-arm residues present in both references"
+                 if not problems else "; ".join(problems))
+
+
 def _conda_env_check(name, module):
     try:
         r = subprocess.run(
@@ -140,11 +170,26 @@ def run_checks(with_env_probes=True):
         _path_check("ESMFold2 HF cache", constants.ESMFOLD_HF_CACHE),
         _esmfold_ligand_support_check(),
         _known_bad_pdb_check(),
+        _rmsd_reference_check(),
     ]
     if with_env_probes:
-        checks.append(_conda_env_check(constants.ENV_TEST, "Bio.PDB"))
-        checks.append(_conda_env_check(constants.ENV_ROSETTA, "pyrosetta"))
+        for env, module in constants.ENV_MODULES:
+            checks.append(_conda_env_check(env, module))
     return checks
+
+
+def require_green(with_env_probes=True):
+    """Raise SystemExit unless every check passes.
+
+    Stages call this before doing any work, so a stage cannot run ungated --
+    the spec requires preflight to "refuse to let any batch stage run", which a
+    gate nobody calls does not do.
+    """
+    failed = [c for c in run_checks(with_env_probes=with_env_probes) if not c.ok]
+    if failed:
+        raise SystemExit(
+            "preflight FAILED; refusing to run: "
+            + "; ".join(f"{c.name} ({c.detail})" for c in failed))
 
 
 def main():

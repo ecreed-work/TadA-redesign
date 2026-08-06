@@ -60,3 +60,26 @@ def test_esmfold_screen_is_cheaper_than_full():
 
 def test_known_bad_pdb_is_recorded_so_preflight_can_forbid_it():
     assert "6vpc_dCas9_TadA8e.pdb" in os.path.basename(constants.KNOWN_BAD_PDB)
+
+
+def test_rmsd_reference_is_the_relaxed_parents_not_the_crystal():
+    """Partial diffusion starts from the relaxed parent, so motif drift must be
+    measured against that same coordinate set. Measured divergence between the
+    two candidates is 2.166 A over the FULL arm -- 2x BACKBONE_MOTIF_RMSD_MAX --
+    and the crystal is missing nine FULL-arm sidechain atoms."""
+    assert constants.RMSD_REFERENCE == constants.PARENT_PDB
+    assert constants.CHAINF_RAW not in constants.RMSD_REFERENCE.values()
+
+
+def test_plddt_scales_are_recorded_for_both_folding_models():
+    """ESMFold2 reports 0-1, AF3 reports 0-100. Reusing one margin across both
+    would be a 20x error."""
+    assert constants.ESMFOLD_PLDDT_SCALE == 1.0
+    assert constants.AF3_PLDDT_SCALE == 100.0
+    assert constants.SCREEN_PLDDT_MARGIN < constants.ESMFOLD_PLDDT_SCALE
+
+
+def test_env_modules_covers_every_env_the_campaign_uses():
+    envs = {e for e, _ in constants.ENV_MODULES}
+    assert envs == {constants.ENV_TEST, constants.ENV_ROSETTA,
+                    constants.ENV_RFD3, constants.ENV_MPNN, constants.ENV_ESM}

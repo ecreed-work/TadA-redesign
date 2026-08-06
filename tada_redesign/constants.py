@@ -24,6 +24,15 @@ PARENTS = ("TadA8e", "TadA9")
 PARENT_PDB = {p: os.path.join(REFERENCE_DIR, f"{p}.pdb") for p in PARENTS}
 CHAINF_RAW = os.path.join(REFERENCE_DIR, "chainF_raw.pdb")
 
+# The authoritative reference for every motif RMSD is each parent's RELAXED
+# structure, never the crystal. Partial diffusion starts FROM the relaxed
+# parent, so drift must be measured against that same coordinate set. Measured
+# 2026-08-05: FULL-arm heavy-atom RMSD crystal -> TadA8e.pdb is 2.166 A, twice
+# BACKBONE_MOTIF_RMSD_MAX, and chainF_raw.pdb is missing nine FULL-arm sidechain
+# atoms (Arg153, Asn157), so motif_rmsd raises KeyError against it. chainF_raw
+# is used ONLY as check_zn_geometry's crystallographic Zn reference.
+RMSD_REFERENCE = dict(PARENT_PDB)
+
 PDB6VPC = os.path.join(
     MONOREPO,
     "tada8e-cas9-Interface-design/structural_analysis/structures/"
@@ -73,6 +82,11 @@ LENGTH_RANGE = (150, 175)        # residues
 ZN_DONOR_RANGE = (2.0, 2.6)      # A, Zn to each of its three donors
 
 SCREEN_PLDDT_MARGIN = 0.05       # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
+# The two folding models do NOT share a pLDDT scale: ESMFold2 reports 0-1,
+# AF3 reports 0-100. SCREEN_PLDDT_MARGIN is expressed on ESMFold2's scale;
+# any AF3 comparison must scale by AF3_PLDDT_SCALE / ESMFOLD_PLDDT_SCALE first.
+ESMFOLD_PLDDT_SCALE = 1.0
+AF3_PLDDT_SCALE = 100.0
 SCREEN_MOTIF_RMSD_MAX = 1.5      # A, looser: reduced sampling is noisier
 FINAL_MOTIF_RMSD_MAX = 1.0       # A, full sampling / AF3
 SCREEN_SURVIVORS = 2000          # compute decision; the dropped count is logged
@@ -104,6 +118,25 @@ DEGRADED_FRACTION = 0.20
 ESMFOLD_SCREEN = {"num_loops": 4, "num_sampling_steps": 20}
 ESMFOLD_FULL = {"num_loops": 20, "num_sampling_steps": 100}
 
+# ------------------------------------------------------------------ DNA context
+# DNA context, measured 2026-08-05: chain D residues 23-29 are everything within
+# 12 A of the 8AZ. Chain C has NOTHING within 12 A and is excluded entirely,
+# which also keeps RFD3's fixed-context token budget small (an earlier campaign
+# OOM'd an 80 GB A100 by including the whole Cas9 context).
+DNA_CONTEXT_CUTOFF = 12.0
+DNA_CONTEXT_RESIDS = (23, 24, 25, 26, 27, 28, 29)
+# AtomWorks drops non-standard residues on load, so RFD3 never sees the 8AZ at
+# D26; hotspots go on the retained nucleotides flanking it.
+HOTSPOT_RESIDS = (25, 27)
+
+# LigandMPNN solubility biasing, applied ONLY at exposed, designable positions.
+# Magnitudes are logit offsets and are deliberately modest; the zero-bias control
+# set exists to measure whether they help at all rather than assuming it.
+HYDROPHOBIC_SET = "FILMVW"
+POLAR_SET = "DEKNQRST"
+HYDROPHOBIC_BIAS = -1.0
+POLAR_BIAS = 0.3
+
 # ------------------------------------------------------------------- runtime
 RUN_DIR_NAME = "20260805_tada_redesign"
 
@@ -112,6 +145,16 @@ ENV_RFD3 = "cas9-pam-design"
 ENV_MPNN = "ligandmpnn-sc"
 ENV_ESM = "esmfold2"
 ENV_ROSETTA = "pyrosetta"
+
+# (env, module) pairs preflight probes. All five are load-bearing: a batch that
+# starts before its env is verified dies on an import after preflight said green.
+ENV_MODULES = (
+    (ENV_TEST, "Bio.PDB"),
+    (ENV_ROSETTA, "pyrosetta"),
+    (ENV_RFD3, "rfd3"),
+    (ENV_MPNN, "prody"),
+    (ENV_ESM, "transformers"),
+)
 
 RFD3_CKPT = ("/research_jude/rgs01_jude/groups/tsaigrp/projects/Genomics/"
              "common/claude/foundry_ckpt/rfd3_latest.ckpt")
