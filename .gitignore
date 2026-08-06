@@ -1,5 +1,9 @@
-outputs/
-logs/
+# Run outputs and SLURM job logs are anchored to the repo ROOT with a leading
+# slash. A bare `logs/` also matches `docs/logs/`, which silently swallowed this
+# campaign's three log files when they were moved in here on 2026-08-06 -- the
+# commit reported success while tracking nothing. Keep these anchored.
+/outputs/
+/logs/
 __pycache__/
 *.pyc
 .pytest_cache/
