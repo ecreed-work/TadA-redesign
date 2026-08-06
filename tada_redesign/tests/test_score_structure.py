@@ -90,12 +90,9 @@ def test_cleft_clearance_detects_a_closed_cleft():
 
 
 def _substrate_xyz():
-    """8AZ (the target-base analogue) coordinates from 6VPC chain D."""
-    from Bio.PDB import PDBParser
-    model = PDBParser(QUIET=True).get_structure("x", constants.PDB6VPC)[0]
-    res = next(r for r in model[constants.SUBSTRATE_CHAIN]
-               if r.get_resname().strip() == constants.SUBSTRATE_RESNAME)
-    return np.array([a.get_coord() for a in res])
+    """Delegates to substrate.substrate_xyz -- one extractor, not two."""
+    from tada_redesign import substrate
+    return substrate.substrate_xyz()
 
 
 def test_cleft_clearance_excludes_the_catalytic_metal_by_default():
