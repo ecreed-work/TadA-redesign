@@ -35,6 +35,20 @@ COLUMNS = ("backbone", "cell", "parent", "arm", "partial_t", "path",
 ZN_DONORS = ((57, "ND1"), (87, "SG"), (90, "SG"))
 
 
+def backbone_id(path):
+    """Filename minus its compression/format suffix.
+
+    NOT `split(".")[0]`: cell ids embed a float (e.g. `pt1.0`), so splitting on
+    the first dot truncates mid-name and makes every model in a cell collide on
+    one id.
+    """
+    name = os.path.basename(path)
+    for suffix in (".cif.gz", ".cif", ".pdb", ".ent"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return os.path.splitext(name)[0]
+
+
 def load_backbone(path):
     """Chain-F heavy atoms from an RFD3 `.cif.gz` (or a plain `.cif`/`.pdb`)."""
     if path.endswith((".pdb", ".ent")):
@@ -95,7 +109,7 @@ def _row(backbone, cell, path, **kw):
 def evaluate(cif_path, ref_atoms, residues, cell):
     """One `backbones.tsv` row. Never raises: an unreadable file becomes a
     failed row so a single bad file cannot kill the shard."""
-    backbone = os.path.basename(cif_path).split(".")[0]
+    backbone = backbone_id(cif_path)
     try:
         atoms = load_backbone(cif_path)
     except Exception as exc:                      # noqa: BLE001 - deliberate
@@ -148,10 +162,13 @@ def main(argv=None):
     ref_cache = {}
     counts = collections.Counter()
     per_cell = collections.defaultdict(collections.Counter)
-    paths = sorted(glob.glob(os.path.join(args.run_dir, args.rfd_subdir, "*.cif.gz")))
+    paths = sorted(glob.glob(os.path.join(args.run_dir, args.rfd_subdir, "*", "*.cif.gz")))
 
     for path in paths:
-        cell = os.path.basename(path).split(".")[0].rsplit("_", 1)[0]
+        # RFD3 names outputs <yaml-stem>_<group>_<batch>_model_<n>.cif.gz and cell
+        # ids embed a float, so the cell comes from the per-cell output DIRECTORY,
+        # never from parsing the filename (measured 2026-08-05).
+        cell = os.path.basename(os.path.dirname(path))
         parent, arm = cell.split("_")[0], cell.split("_")[1]
         if parent not in ref_cache:
             ref_cache[parent] = score_structure.heavy_atoms_from_pdb(

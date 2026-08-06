@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from tada_redesign import constants, filter_backbones as fb, motif, score_structure as ss
+from tada_redesign import io as tio
 
 DONORS = ((57, "ND1"), (87, "SG"), (90, "SG"))
 
@@ -111,3 +112,32 @@ def test_columns_are_stable_and_include_the_cell():
     for col in ("backbone", "cell", "parent", "arm", "partial_t",
                 "n_res", "max_ca_break", "motif_rmsd", "status", "passed"):
         assert col in fb.COLUMNS
+
+
+def test_backbone_id_survives_a_float_in_the_cell_name():
+    """Two models of one cell must get DISTINCT ids; `split(".")[0]` collided them."""
+    a = fb.backbone_id("/x/cell_TadA8e_FULL_pt1.0_TadA8e_FULL_pt1.0_0_model_0.cif.gz")
+    b = fb.backbone_id("/x/cell_TadA8e_FULL_pt1.0_TadA8e_FULL_pt1.0_0_model_1.cif.gz")
+    assert a.endswith("_model_0") and b.endswith("_model_1")
+    assert a != b
+
+
+def test_main_derives_the_cell_from_the_directory_not_the_filename(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    cell = "TadA8e_FULL_pt1.0"
+    cell_dir = run / "rfd" / cell
+    cell_dir.mkdir(parents=True)
+    (cell_dir / f"cell_{cell}_{cell}_0_model_0.cif.gz").write_bytes(b"")
+    atoms = _linear_backbone()
+    monkeypatch.setattr(fb, "load_backbone", lambda path: dict(atoms))
+    monkeypatch.setattr(fb.score_structure, "heavy_atoms_from_pdb",
+                        lambda path, chain=None: dict(atoms))
+    monkeypatch.setattr(fb.motif, "load_masks", lambda: {})
+    monkeypatch.setattr(fb.motif, "arm_residues", lambda arm, masks: (5, 6, 7))
+    assert fb.main(["--run-dir", str(run)]) == 0
+    rows = tio.read_tsv(str(run / "backbones.tsv"))
+    assert len(rows) == 1
+    assert rows[0]["cell"] == cell
+    assert rows[0]["parent"] == "TadA8e" and rows[0]["arm"] == "FULL"
+    assert rows[0]["partial_t"] == "1.0"
+    assert rows[0]["status"] == "ok"
