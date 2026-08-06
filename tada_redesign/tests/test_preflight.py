@@ -126,6 +126,16 @@ def test_rmsd_reference_check_is_present_and_passes():
     assert checks["RMSD reference completeness"].ok is True
 
 
+def test_rmsd_reference_check_reports_failure_on_an_unparsable_reference(monkeypatch):
+    """A corrupt reference must yield a failed Check, not take down the gate."""
+    def boom(path, chain=None):
+        raise ValueError("malformed PDB")
+    monkeypatch.setattr(preflight.score_structure, "heavy_atoms_from_pdb", boom)
+    c = preflight._rmsd_reference_check()
+    assert c.ok is False
+    assert "unparsable" in c.detail
+
+
 def test_require_green_raises_when_a_check_fails(monkeypatch):
     monkeypatch.setattr(preflight, "run_checks",
                         lambda **kw: [preflight.Check("bad", False, "nope")])

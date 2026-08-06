@@ -15,7 +15,7 @@ import subprocess
 import sys
 from collections import namedtuple
 
-from . import constants, motif
+from . import constants, motif, score_structure
 
 Check = namedtuple("Check", "name ok detail")
 
@@ -120,7 +120,6 @@ def _rmsd_reference_check():
     exactly such a structure (missing nine FULL-arm sidechain atoms at Arg153 and
     Asn157), which is why RMSD_REFERENCE is the relaxed parents.
     """
-    from . import motif, score_structure
     try:
         masks = motif.load_masks()
     except (OSError, ValueError, KeyError) as exc:
@@ -131,7 +130,16 @@ def _rmsd_reference_check():
         if not os.path.exists(pdb):
             problems.append(f"{parent}: missing {pdb}")
             continue
-        atoms = score_structure.heavy_atoms_from_pdb(pdb)
+        try:
+            atoms = score_structure.heavy_atoms_from_pdb(pdb)
+        except Exception as exc:                  # noqa: BLE001 - Biopython
+            # raises several unrelated exception types (PDBConstructionException
+            # among them) on a malformed structure. This gate's contract is to
+            # report a failure for anything it cannot verify; narrowing the
+            # catch would let an unanticipated parser error crash preflight
+            # itself, which is the exact defect this except clause closes.
+            problems.append(f"{parent}: unparsable ({exc})")
+            continue
         present = {resnum for resnum, _ in atoms}
         absent = sorted(residues - present)
         if absent:
