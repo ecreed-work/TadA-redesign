@@ -7,3 +7,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Subagent-driven-development scratch (ledger, briefs, review packages).
+# Git-ignored by design: the git history is the durable record.
+.superpowers/
