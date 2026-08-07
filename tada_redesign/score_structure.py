@@ -209,6 +209,38 @@ def motif_rmsd(ref_atoms, pred_atoms, residues, anchor_residues=None):
     return float(np.sqrt(np.mean(np.sum((ref_xyz - pred_xyz) ** 2, axis=1))))
 
 
+def align_numbering(ref_atoms, pred_atoms):
+    """`pred_atoms` renumbered onto `ref_atoms`' residue numbering.
+
+    A folding model is handed only a sequence, so it numbers its output from 1,
+    while this campaign's structures use the crystal's chain-F numbering
+    (5-160). Measuring one against the other looks up residue 57 in a structure
+    whose residue 57 is really residue 61 -- which surfaces as every measured
+    atom being "missing" rather than as a wrong number, so it fails loudly but
+    for a misleading reason.
+
+    The offset is DERIVED from the two residue sets, never assumed: a hardcoded
+    shift would silently mis-align a model of a different length. Raises if the
+    two cannot be reconciled by a single uniform shift, so a genuinely
+    mismatched model fails instead of being forced into false agreement.
+    """
+    ref_res = sorted(ca_map(ref_atoms))
+    pred_res = sorted(ca_map(pred_atoms))
+    if len(ref_res) != len(pred_res):
+        raise ValueError(
+            f"cannot align numbering: reference has {len(ref_res)} residues, "
+            f"prediction has {len(pred_res)}")
+    offset = ref_res[0] - pred_res[0]
+    if [r + offset for r in pred_res] != ref_res:
+        raise ValueError(
+            "cannot align numbering: residue sets do not differ by a single "
+            f"uniform shift (offset {offset} does not reconcile them)")
+    if offset == 0:
+        return pred_atoms
+    return {(resnum + offset, name): xyz
+            for (resnum, name), xyz in pred_atoms.items()}
+
+
 def cleft_clearance(ref_atoms, pred_atoms, substrate_xyz, anchor_residues=None,
                     exclude_atom_names=(constants.ZN_RESNAME,)):
     """Minimum distance (A) from any substrate atom to any design heavy atom.

@@ -114,50 +114,101 @@ Chain F itself is present in the output (`{'F', 'B'}` in the CIF), so criterion
 not triggered). Criterion 2 — every design coming back unmeasurable — **is**
 triggered, with the mechanism fully identified.
 
-**No fix was attempted.** `fold_many.py` is in the monorepo and outside this
-task's file scope (`preflight.py`, `test_preflight.py`, this log); the brief's
-explicit instruction for this failure class is to stop and report it, not work
-around it. The likely fix is a residue-number offset (start at 5, matching
-`REFERENCE_DIR`'s convention) passed into `ProteinInput`/the mmCIF writer in
-`fold_many.py`, but that decision and its implementation belong to a follow-up
-task, not this one.
+**No fix was attempted in `fold_many.py`.** It is in the monorepo, outside this
+task's file scope, and it is handed only a sequence — numbering from 1 is
+correct behaviour for a generic folder, and baking a campaign-specific offset
+into a shared monorepo tool would be wrong. The reconciliation belongs where
+the folded model is read.
 
-**Consequence: the full 44-shard screen has NOT been submitted and must NOT
-be submitted until this numbering mismatch is fixed and re-verified on a fresh
-cheap debug shard.** Every design would otherwise fail the same way, exactly
-as `SCREEN_SURVIVORS`/`DEGRADED_FRACTION` are designed to catch, but only after
-the GPU spend for all 10,542 folds was already gone.
+## Fix: `score_structure.align_numbering` (applied after the report above)
+
+Added `align_numbering(ref_atoms, pred_atoms)` to `score_structure.py`, called
+from `score_folds.score_one` before `motif_rmsd`/`cleft_clearance`. The offset
+is **derived** from the two residue-number sets, never hardcoded: it computes
+`ref_res[0] - pred_res[0]` and verifies that shift reconciles the *entire* two
+sets before applying it, raising `ValueError` (caught by `score_one`'s existing
+`try`, so it becomes an `unscorable` row, not a stage-killing exception) if a
+single uniform shift cannot explain the mismatch — a hardcoded `+4` would have
+"fixed" this shard while silently mis-aligning any future model of a different
+length. Four tests added to `test_score_structure.py` covering the shift, the
+already-matching no-op case, a residue-count mismatch, and a gapped/non-uniform
+mismatch that must raise rather than be forced into agreement.
+
+**Re-scored the same 21 already-folded models, no GPU spend:**
+```
+conda run -n ligandmpnn_env python -m tada_redesign.score_folds \
+  --run-dir outputs/20260806_tada_redesign_gen1
+```
+No more `unscorable` rows — `align_numbering` resolves cleanly (offset +4,
+verified as a single uniform shift across all 156 residues) for every design,
+confirming the root cause was fully and correctly identified. But the real
+geometric measurement it unblocks is **not a pass**:
+
+- **Status distribution (21 designs): `motif_drift` 18, `low_plddt` 3, `passed`
+  0.**
+- **pLDDT: median 0.877, range 0.835-0.902** (unchanged from the blocked run,
+  as expected — pLDDT never depended on numbering).
+- **motif_rmsd: median 8.863 A, range 3.898-9.847 A.** Every value but one
+  (3.898 A) is above 7 A. This is far beyond `SCREEN_MOTIF_RMSD_MAX` (1.5 A) and
+  far beyond the crystal-vs-relaxed-parent reference point (2.166 A, this
+  campaign's own worst previously-seen case). `cleft_clearance` values
+  (0.27-1.54 A) stayed in a plausible range, which is some evidence the
+  superposition itself is not separately broken.
+
+**This is reported as a real, different finding, not treated as success or as
+evidence of a further software defect.** The numbering fix is verified
+correct (independently confirmed against `designs.tsv`'s own sequence field
+in the earlier root-cause section); what it exposes is that this shard's
+screen-mode ESMFold2 refolds of these `FULL`-arm, `partial_t=1.0` designs do
+not preserve the intended active-site geometry within tolerance, despite
+decent per-residue confidence (pLDDT ~0.84-0.90) and despite the underlying
+RFD3 backbones themselves having been measured at only 0.036-0.057 A backbone
+drift from the parent (`docs/logs/20260806_tada_redesign_final_fix_wave.md`).
+Candidate explanations not investigated here — reduced sampling (`num_loops=4,
+num_sampling_steps=20`) being far noisier for this motif than the constants'
+own docstring anticipated, or the redesigned (non-frozen) 132 positions
+genuinely destabilizing the frozen arm's packing — are a question for whoever
+decides how to proceed with Part 3b, not something resolved by this task.
+**The full 44-shard screen still has NOT been submitted** and should not be
+until this is understood: if it is representative, `SCREEN_SURVIVORS=2000`
+would not be reached and the screen would need to fall back to the spec's
+documented MPNN-score-first gating, which is a human decision.
 
 ## Suite count
 
-147 passed, 1 deselected (`-m "not slow"`), out of 148 collected.
+151 passed, 1 deselected (`-m "not slow"`), out of 152 collected (147 + 4 new
+`align_numbering` tests).
 
 ## Honesty ceiling
 
 pLDDT measures model confidence; motif RMSD measures active-site geometry.
 Neither is stability, solubility, or deaminase activity, and nothing in this
-task constitutes wet-lab validation. In this specific run, pLDDT could not even
-be gated meaningfully because the geometric measurement it would be gated
-alongside failed outright — the pLDDT numbers above describe confidence in a
-structure whose active-site residue identities could not be verified to be
-where this campaign's own reference numbering says they should be.
+task constitutes wet-lab validation. Once `align_numbering` made the geometric
+measurement possible, it showed active-site drift far outside this screen's own
+tolerance for every design in this shard — a confident fold (pLDDT ~0.84-0.90)
+is not evidence the active site sits where the design intended, and this task
+does not attempt to explain why it does not.
 
 ## Follow-up items
 
-1. **Blocking.** Fix the residue-numbering offset in `tools/esmfold2/
-   fold_many.py` (or add an explicit renumbering step in `fold_screen.py`/
-   `score_folds.py`) so chain F starts at residue 5, matching
-   `constants.RMSD_REFERENCE` and `motif.arm_residues`. Re-run this same debug
-   shard (or a fresh equivalently cheap one) end to end and confirm nonzero
-   `motif_rmsd` values and a sane pass rate before any further folding.
-2. Re-verify Task 2's baseline (`fold_probe`, `reference_baseline`) fold outputs
-   against the same numbering check — those were scored by inspection of pLDDT
-   only, never by `motif_rmsd`, so they would not have surfaced this offset.
-3. Once fixed, re-measure whether `node contention adds meaningful average cost
-   to the 2.88 GPU-hour projection; today's single data point (40 min cold load
-   under heavy contention vs. 104.5 s previously) suggests requesting a
-   less-loaded node or a higher `-t` margin may matter operationally, though it
-   does not change the GPU-second cost model itself.
+1. **Re-verify Task 2's baseline** (`fold_probe`, `reference_baseline`) fold
+   outputs against `align_numbering` — those were scored by inspection of
+   pLDDT only, never by `motif_rmsd`, so a numbering offset there (if any)
+   would not have been caught. `reference_baseline`'s parent folds use the
+   exact same `PARENT_SEQUENCE` strings and `fold_many.py` path as the designs,
+   so they likely carry the identical offset; whether their own motif geometry
+   also drifts by several angstroms after alignment is untested.
+2. **Understand the motif-drift finding above** before deciding whether/how to
+   proceed with the screen: is 3.9-9.8 A drift specific to this cell
+   (`TadA8e_FULL_pt1.0`), to `screen`-mode's reduced sampling, or general? A
+   next debug shard drawn from a different cell (e.g. a `MIN`-arm or higher
+   `partial_t`) would help distinguish those. This is a human decision, not
+   something this task resolves.
+3. Re-measure whether node contention adds meaningful average cost to the 2.88
+   GPU-hour projection; today's single data point (40 min cold load under heavy
+   contention vs. 104.5 s previously) suggests requesting a less-loaded node or
+   a higher `-t` margin may matter operationally, though it does not change the
+   GPU-second cost model itself.
 
 Co-Authored-By: Ethan Creed <ethan.creed@stjude.org>
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

@@ -67,6 +67,7 @@ def score_one(cif_path, metrics_path, ref_atoms, residues, substrate_xyz):
         return out
     try:
         atoms = score_structure.heavy_atoms_from_cif(cif_path)
+        atoms = score_structure.align_numbering(ref_atoms, atoms)
         out["motif_rmsd"] = score_structure.motif_rmsd(ref_atoms, atoms, residues)
         out["cleft_clearance"] = score_structure.cleft_clearance(
             ref_atoms, atoms, substrate_xyz)

@@ -194,3 +194,29 @@ def test_metal_xyz_returns_none_when_absent(tmp_path):
         "_atom_site.auth_seq_id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n_atom_site.Cartn_z\n"
         "ATOM   C  CA ALA F 57 1.000 2.000 3.000\n")
     assert ss.metal_xyz(str(cif)) is None
+
+
+def test_align_numbering_shifts_a_model_numbered_from_one():
+    ref = {(5, "CA"): np.zeros(3), (6, "CA"): np.ones(3)}
+    pred = {(1, "CA"): np.zeros(3), (2, "CA"): np.ones(3)}
+    got = ss.align_numbering(ref, pred)
+    assert sorted(ss.ca_map(got)) == [5, 6]
+
+
+def test_align_numbering_is_a_no_op_when_numbering_already_matches():
+    ref = {(5, "CA"): np.zeros(3), (6, "CA"): np.ones(3)}
+    assert ss.align_numbering(ref, dict(ref)) == ref
+
+
+def test_align_numbering_raises_on_a_residue_count_mismatch():
+    ref = {(5, "CA"): np.zeros(3), (6, "CA"): np.ones(3)}
+    with pytest.raises(ValueError):
+        ss.align_numbering(ref, {(1, "CA"): np.zeros(3)})
+
+
+def test_align_numbering_raises_when_no_single_shift_reconciles_them():
+    """A gapped prediction must fail rather than be forced into alignment."""
+    ref = {(5, "CA"): np.zeros(3), (6, "CA"): np.ones(3), (7, "CA"): np.ones(3)}
+    pred = {(1, "CA"): np.zeros(3), (2, "CA"): np.ones(3), (9, "CA"): np.ones(3)}
+    with pytest.raises(ValueError):
+        ss.align_numbering(ref, pred)
