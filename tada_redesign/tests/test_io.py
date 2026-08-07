@@ -67,3 +67,19 @@ def test_write_tsv_emits_the_header_comment_first(tmp_path):
     text = open(path).read()
     assert text.startswith("# dropped 3 rows\n")
     assert tio.read_tsv(path)[0]["design_id"] == "d1"
+
+
+def test_write_tsv_leaves_no_temp_file_behind(tmp_path):
+    path = str(tmp_path / "w.tsv")
+    tio.write_tsv(path, [{"design_id": "d1", "parent": "p", "score": "1"}], COLUMNS)
+    assert sorted(os.listdir(tmp_path)) == ["w.tsv"]
+
+
+def test_write_tsv_does_not_clobber_the_old_file_when_a_row_is_invalid(tmp_path):
+    """A failed rewrite must leave the previous table intact, not truncated."""
+    path = str(tmp_path / "w.tsv")
+    tio.write_tsv(path, [{"design_id": "good", "parent": "p", "score": "1"}], COLUMNS)
+    with pytest.raises(ValueError):
+        tio.write_tsv(path, [{"design_id": "d", "typo": "x"}], COLUMNS)
+    assert tio.read_tsv(path)[0]["design_id"] == "good"
+    assert sorted(os.listdir(tmp_path)) == ["w.tsv"]

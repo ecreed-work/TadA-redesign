@@ -106,3 +106,17 @@ def test_tada9_differs_from_tada8e_at_exactly_its_two_defining_positions():
     assert diffs == {108, 145}, diffs
     assert (a[108 - 5], b[108 - 5]) == ("N", "Q")
     assert (a[145 - 5], b[145 - 5]) == ("L", "T")
+
+
+def test_parent_sequences_come_from_contiguous_residues_5_to_160():
+    """len == 156 is not enough: a gapped PDB extending past 160 would give the
+    same length with shifted indexing, silently corrupting every mutation count
+    and the N108Q/L145T positions that depend on resnum - 5."""
+    import sys
+    sys.path.insert(0, constants.TADA_STABILITY)
+    from tada_stability import prep_scaffolds
+    for parent, pdb in constants.PARENT_PDB.items():
+        by_resnum = prep_scaffolds.parent_sequence(pdb)
+        assert sorted(by_resnum) == list(range(5, 161)), parent
+        joined = "".join(by_resnum[r] for r in sorted(by_resnum))
+        assert joined == constants.PARENT_SEQUENCE[parent], parent

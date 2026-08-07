@@ -11,6 +11,7 @@ validate any biophysical quantity.
 """
 import csv
 import os
+import tempfile
 
 COMMENT = "#"
 MISSING = "NA"
@@ -53,16 +54,35 @@ def append_row(path, row, columns):
 
 
 def write_tsv(path, rows, columns, header_comment=None):
-    """Whole-file write. `header_comment` is emitted as a leading `#` line."""
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", newline="") as fh:
-        if header_comment:
-            fh.write(f"{COMMENT} {header_comment}\n")
-        writer = csv.DictWriter(fh, fieldnames=list(columns), delimiter="\t",
-                                lineterminator="\n")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(_validate(row, columns))
+    """Whole-file write. `header_comment` is emitted as a leading `#` line.
+
+    Written to a sibling temp file and renamed, so a crash or a full disk
+    cannot leave a truncated table behind. Several stages rewrite their own
+    canonical input in place (enrich_designs rewrites designs.tsv), and a
+    half-written table would be silently read by every later stage.
+    `os.replace` is atomic within a filesystem; the temp file is a sibling
+    precisely so the rename never crosses one.
+    """
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                               prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", newline="") as fh:
+            if header_comment:
+                fh.write(f"{COMMENT} {header_comment}\n")
+            writer = csv.DictWriter(fh, fieldnames=list(columns), delimiter="\t",
+                                    lineterminator="\n")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(_validate(row, columns))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def count_rows(path):
