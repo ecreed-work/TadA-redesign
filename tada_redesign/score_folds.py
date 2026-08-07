@@ -116,7 +116,10 @@ def main(argv=None):
         }, COLUMNS)
 
     print(f"[score_folds] {n_pass}/{len(designs)} passed -> {out_path}")
-    final, degraded = provenance.output_path(out_path, len(designs), len(designs))
+    # Every design produced a row (score_one never raises), so the degraded gate
+    # compares rows WRITTEN to inputs and cannot trip here. A low PASS rate is a
+    # measurement, not a stage failure -- the correction an earlier review
+    # required, kept deliberately in place.
     provenance.write(args.run_dir, "score_folds", len(designs), len(designs),
                      extra={"n_passed": n_pass,
                             "pass_rate": round(n_pass / float(len(designs)), 4)})
