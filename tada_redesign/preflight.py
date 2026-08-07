@@ -149,6 +149,29 @@ def _rmsd_reference_check():
                  if not problems else "; ".join(problems))
 
 
+def _fold_many_check():
+    """The batch folder must exist and expose --jobs; without it the screen pays
+    the model load once per design (~660 GPU-hours at the measured rate)."""
+    path = os.path.join(constants.MONOREPO, "tools/esmfold2/fold_many.py")
+    if not os.path.exists(path):
+        return Check("fold_many available", False, f"missing {path}")
+    src = open(path).read()
+    ok = "--jobs" in src and "ESMFold2Model.from_pretrained" in src
+    return Check("fold_many available", ok, path)
+
+
+def _designs_enriched_check():
+    """designs.tsv must carry the spec's identity_to_parent and mutation_count."""
+    sub = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(sub, "outputs", constants.RUN_DIR_NAME, "designs.tsv")
+    if not os.path.exists(path):
+        return Check("designs.tsv enriched", False, f"missing {path}")
+    header = open(path).readline().rstrip("\n").split("\t")
+    missing = [c for c in ("identity_to_parent", "mutation_count") if c not in header]
+    return Check("designs.tsv enriched", not missing,
+                 path if not missing else f"missing columns {missing}")
+
+
 def _conda_env_check(name, module):
     try:
         r = subprocess.run(
@@ -179,6 +202,8 @@ def run_checks(with_env_probes=True):
         _esmfold_ligand_support_check(),
         _known_bad_pdb_check(),
         _rmsd_reference_check(),
+        _fold_many_check(),
+        _designs_enriched_check(),
     ]
     if with_env_probes:
         for env, module in constants.ENV_MODULES:

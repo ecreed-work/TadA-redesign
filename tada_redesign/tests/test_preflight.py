@@ -148,3 +148,9 @@ def test_require_green_returns_quietly_when_all_pass(monkeypatch):
     monkeypatch.setattr(preflight, "run_checks",
                         lambda **kw: [preflight.Check("fine", True, "ok")])
     assert preflight.require_green(with_env_probes=False) is None
+
+
+def test_new_part3_checks_are_registered():
+    names = {c.name for c in preflight.run_checks(with_env_probes=False)}
+    assert "fold_many available" in names
+    assert "designs.tsv enriched" in names

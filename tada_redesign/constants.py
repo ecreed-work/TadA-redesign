@@ -156,7 +156,10 @@ PARENT_SEQUENCE = {
 # FOLD_BATCH_SIZE is how many designs one process folds before exiting (a cap,
 # so a crash loses at most this much work).
 FOLD_BATCH_SIZE = 250
-FOLD_SHARDS = 44          # ceil(10542 / 250); re-derive if the design count moves
+FOLD_SHARDS = 44          # 44 shards of ~240 designs each (10542 / 44); this
+                          # count must stay >= ceil(n_designs / FOLD_BATCH_SIZE)
+                          # so no shard exceeds the batch cap -- re-derive if
+                          # the design count moves
 
 ENV_TEST = "ligandmpnn_env"
 ENV_RFD3 = "cas9-pam-design"
