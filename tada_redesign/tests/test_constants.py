@@ -83,3 +83,26 @@ def test_env_modules_covers_every_env_the_campaign_uses():
     envs = {e for e, _ in constants.ENV_MODULES}
     assert envs == {constants.ENV_TEST, constants.ENV_ROSETTA,
                     constants.ENV_RFD3, constants.ENV_MPNN, constants.ENV_ESM}
+
+
+def test_run_dir_points_at_the_production_run():
+    """Part 2's production generation wrote 20260806_tada_redesign_gen1; the old
+    default was the debug dir and would silently score the wrong run."""
+    assert constants.RUN_DIR_NAME == "20260806_tada_redesign_gen1"
+
+
+def test_parent_sequences_are_present_and_the_right_length():
+    assert set(constants.PARENT_SEQUENCE) == set(constants.PARENTS)
+    for parent, seq in constants.PARENT_SEQUENCE.items():
+        assert len(seq) == 156, (parent, len(seq))
+        assert set(seq) <= set("ACDEFGHIKLMNPQRSTVWY")
+
+
+def test_tada9_differs_from_tada8e_at_exactly_its_two_defining_positions():
+    """TadA-9 = TadA-8e + N108Q + L145T. Chain F starts at residue 5, so
+    sequence index = resnum - 5."""
+    a, b = constants.PARENT_SEQUENCE["TadA8e"], constants.PARENT_SEQUENCE["TadA9"]
+    diffs = {i + 5 for i, (x, y) in enumerate(zip(a, b)) if x != y}
+    assert diffs == {108, 145}, diffs
+    assert (a[108 - 5], b[108 - 5]) == ("N", "Q")
+    assert (a[145 - 5], b[145 - 5]) == ("L", "T")

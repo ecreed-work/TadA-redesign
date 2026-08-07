@@ -138,7 +138,25 @@ HYDROPHOBIC_BIAS = -1.0
 POLAR_BIAS = 0.3
 
 # ------------------------------------------------------------------- runtime
-RUN_DIR_NAME = "20260805_tada_redesign"
+# Part 2's PRODUCTION generation ran here. The previous value
+# ("20260805_tada_redesign") was the debug run: 6 backbones at reduced RFD3
+# sampling. Scoring that directory would silently rank debug artifacts.
+RUN_DIR_NAME = "20260806_tada_redesign_gen1"
+
+# Chain F residues 5-160 of each relaxed reference, read from the tracked
+# reference PDBs by prep_scaffolds.parent_sequence (never hand-typed).
+# TadA-9 = TadA-8e + N108Q + L145T, asserted by test_constants.
+PARENT_SEQUENCE = {
+    "TadA8e": "EFSHEYWMRHALTLAKRARDEREVPVGAVLVLNNRVIGEGWNRAIGLHDPTAHAEIMALRQGGLVMQNYRLIDATLYVTFEPCVMCAGAMIHSRIGRVVFGVRNSKRGAAGSLMNVLNYPGMNHRVEITEGILADECAALLCDFYRMPRQVFNAQK",
+    "TadA9": "EFSHEYWMRHALTLAKRARDEREVPVGAVLVLNNRVIGEGWNRAIGLHDPTAHAEIMALRQGGLVMQNYRLIDATLYVTFEPCVMCAGAMIHSRIGRVVFGVRQSKRGAAGSLMNVLNYPGMNHRVEITEGILADECAALTCDFYRMPRQVFNAQK",
+}
+
+# ESMFold2 loads its weights once per PROCESS, not once per fold, so the screen
+# folds many designs per invocation. FOLD_SHARDS is the SLURM array width;
+# FOLD_BATCH_SIZE is how many designs one process folds before exiting (a cap,
+# so a crash loses at most this much work).
+FOLD_BATCH_SIZE = 250
+FOLD_SHARDS = 44          # ceil(10542 / 250); re-derive if the design count moves
 
 ENV_TEST = "ligandmpnn_env"
 ENV_RFD3 = "cas9-pam-design"
