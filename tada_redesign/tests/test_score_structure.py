@@ -1,6 +1,8 @@
 """Geometry tests. The two rigid-body tests are non-negotiable: their absence
 is exactly how the predecessor's pocket_rmsd shipped with no superposition at
 all, which would have emptied a shortlist after real GPU spend."""
+import random
+
 import numpy as np
 import pytest
 
@@ -95,36 +97,72 @@ def test_anchor_refinement_excludes_a_flapping_tail_from_the_fit():
 
 
 def test_anchor_refinement_raises_when_too_many_points_are_outliers():
-    """Self-fitting guard: if refinement would drop the retained anchor below
-    `ANCHOR_MIN_RETAINED_FRAC` of the shared CAs, it must raise rather than
-    silently return a small, self-fitted anchor -- which would shrink the
-    reported RMSD by construction."""
+    """Self-fitting guard: if refinement CONVERGES but the stable set it
+    converges on is below `ANCHOR_MIN_RETAINED_FRAC` of the shared CAs,
+    `_anchor_arrays` must raise rather than silently return a small,
+    self-fitted anchor -- which would shrink the reported RMSD by
+    construction. `match=` pins this to the fraction-guard's own message: both
+    `_anchor_arrays` and `kabsch` raise `ValueError` for unrelated reasons
+    (too few shared CA outright, or non-convergence inside
+    `_iterative_anchor_indices` itself), so an unpinned `pytest.raises` could
+    silently start passing for the wrong reason after a refactor."""
+    rng = np.random.default_rng(42)
     ref = _synthetic_atoms(n_res=40)
     R, shift = _rotation(30.0), np.array([5.0, 5.0, 3.0])
     pred = _transformed(ref, R, shift)
-    # 17/40 (42.5%) residues pushed 30 A off the rigid transform: close enough
-    # to half the anchor that no rotation can simultaneously satisfy both the
-    # "good" and "displaced" halves, so iterative refinement cannot converge
-    # on a majority set and collapses toward nothing retained -- far below
-    # the 60% floor.
-    for i in range(24, 41):
-        pred[(i, "CA")] = pred[(i, "CA")] + R @ np.array([30.0, 0.0, 0.0])
-    with pytest.raises(ValueError):
+    # 17/40 (42.5%) residues given DISTINCT (not uniform) large offsets, so
+    # they cannot satisfy any single rigid transform together and refinement
+    # converges cleanly on the 23 structured residues -- 57.5%, above
+    # Kabsch's 3-point floor but below the 60% guard.
+    offsets = rng.normal(size=(17, 3)) * 20.0
+    for k, i in enumerate(range(24, 41)):
+        pred[(i, "CA")] = pred[(i, "CA")] + offsets[k]
+    with pytest.raises(ValueError, match="ANCHOR_MIN_RETAINED_FRAC"):
         ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
+
+
+def test_anchor_refinement_raises_on_non_convergence():
+    """`ANCHOR_MAX_ITER` exhaustion must not silently return a set that never
+    stabilised -- the reported RMSD would then depend on wherever the
+    iteration cap happened to land. Forces exhaustion directly by capping
+    `max_iter=1` on data whose outliers are not excluded in a single pass."""
+    ref = _synthetic_atoms(n_res=20)
+    pred = _transformed(ref, _rotation(20.0), np.array([1.0, 1.0, 1.0]))
+    for i in (18, 19, 20):
+        pred[(i, "CA")] = pred[(i, "CA")] + np.array([8.0, 0.0, 0.0])
+    ref_ca, pred_ca = ss.ca_map(ref), ss.ca_map(pred)
+    shared = sorted(set(ref_ca) & set(pred_ca))
+    P = np.array([ref_ca[r] for r in shared])
+    Q = np.array([pred_ca[r] for r in shared])
+    with pytest.raises(ValueError, match="did not converge"):
+        ss._iterative_anchor_indices(P, Q, cutoff=5.0, max_iter=1)
 
 
 def test_anchor_refinement_is_deterministic():
     """Same inputs must give the same retained anchor and the same RMSD, every
-    run -- no randomness anywhere in the iterative refinement loop."""
+    run -- no randomness anywhere in the iterative refinement loop, and no
+    hidden dependence on dict/set iteration order. Rebuilds `ref`/`pred` with
+    a SHUFFLED insertion order rather than reusing the identical objects
+    twice, which would trivially pass for any RNG-free code without
+    exercising ordering at all."""
     ref = _synthetic_atoms(n_res=20)
     pred = _transformed(ref, _rotation(40.0), np.array([2.0, -3.0, 1.0]))
     for i in (15, 16, 17):
         pred[(i, "CA")] = pred[(i, "CA")] + np.array([8.0, 0.0, 0.0])
+
+    def _shuffled(d, seed):
+        items = list(d.items())
+        random.Random(seed).shuffle(items)
+        return dict(items)
+
+    ref_b, pred_b = _shuffled(ref, 1), _shuffled(pred, 2)
+
     r1 = ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
-    r2 = ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
+    r2 = ss.motif_rmsd(ref_b, pred_b, residues=(1, 2, 3))
     assert r1 == r2
+
     P1, Q1 = ss._anchor_arrays(ref, pred, None)
-    P2, Q2 = ss._anchor_arrays(ref, pred, None)
+    P2, Q2 = ss._anchor_arrays(ref_b, pred_b, None)
     assert np.array_equal(P1, P2)
     assert np.array_equal(Q1, Q2)
 

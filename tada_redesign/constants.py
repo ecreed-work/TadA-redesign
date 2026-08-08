@@ -152,6 +152,9 @@ ANCHOR_MIN_RETAINED_FRAC = 0.60
 # of the parent, no cutoff above the floor could discriminate among them.
 # ESMFold2 cannot resolve design-vs-parent differences at the CORE site;
 # real discrimination is deferred to the stability stage.
+#
+# Honesty ceiling: motif RMSD measures geometry and pLDDT measures model
+# confidence. Neither is stability, solubility, or enzymatic activity.
 MOTIF_RMSD_MAX = 2.0
 PLDDT_MARGIN = 0.05              # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
 # The two folding models do NOT share a pLDDT scale: ESMFold2 reports 0-1,

@@ -24,8 +24,10 @@ gatefix.md, "Correction, 2026-08-08"). A self-fitting guard
 (`ANCHOR_MIN_RETAINED_FRAC`) stops refinement from collapsing the anchor
 down toward the measured set itself.
 
-Honesty ceiling: an intact motif geometry in a predicted model is not evidence
-of catalytic activity. Nothing in this module measures function.
+Honesty ceiling: motif RMSD measures geometry and pLDDT measures model
+confidence. An intact motif geometry in a predicted model is not evidence of
+catalytic activity, and neither quantity is stability, solubility, or
+enzymatic activity. Nothing in this module measures function.
 """
 import os
 
@@ -191,6 +193,16 @@ def _iterative_anchor_indices(P, Q, cutoff=None, max_iter=None):
     from the crystal and, included in an all-CA anchor, pushed the unmodified
     parent's own CORE-motif RMSD from ~1.35 A to 3.5 A.
 
+    Raises `ValueError` rather than returning a set that never stabilised:
+    once `keep` excludes at least one point, that point is gone for good (each
+    iteration's set is a strict subset of the last, since `keep.all()` already
+    returned otherwise) -- so the only ways out of the loop are convergence
+    (`keep.all()`), collapsing below Kabsch's own 3-point floor, or exhausting
+    `max_iter` without settling. The brief requires convergence on a STABLE
+    set; a non-converged anchor's RMSD would depend on wherever the cap
+    happened to land, which is exactly the silent-bad-measurement failure
+    mode this whole task exists to remove.
+
     Deterministic: no randomness anywhere in the loop, so identical inputs
     give the identical sequence of fits and the identical retained index set.
     """
@@ -203,21 +215,16 @@ def _iterative_anchor_indices(P, Q, cutoff=None, max_iter=None):
         deviation = np.linalg.norm(P[idx] - Q_fit, axis=1)
         keep = deviation <= cutoff
         if keep.all():
-            break
-        new_idx = idx[keep]
-        if len(new_idx) == len(idx):
-            break
-        # Adopt the smaller set even if it now falls below 3 points (Kabsch's
-        # own floor): silently keeping the STALE, larger `idx` here would mask
-        # exactly the failure `_anchor_arrays`' self-fitting guard exists to
-        # catch, by reporting "nothing was dropped" when actually everything
-        # was. Falling below 3 points always ALSO fails the (much higher,
-        # 60%-of-shared-CA) retained-fraction guard downstream, so this still
-        # surfaces as a raised ValueError rather than a silently bad fit.
-        idx = new_idx
+            return idx
+        idx = idx[keep]
         if len(idx) < 3:
-            break
-    return idx
+            raise ValueError(
+                f"iterative anchor refinement collapsed to {len(idx)} "
+                f"point(s) before converging (cutoff={cutoff}); Kabsch needs "
+                ">= 3")
+    raise ValueError(
+        f"iterative anchor refinement did not converge to a stable set "
+        f"within ANCHOR_MAX_ITER={max_iter} iterations at cutoff={cutoff}")
 
 
 def _anchor_arrays(ref_atoms, pred_atoms, anchor_residues):
