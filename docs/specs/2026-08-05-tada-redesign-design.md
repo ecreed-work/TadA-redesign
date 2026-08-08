@@ -287,14 +287,44 @@ reference diverge freely, and that divergence dominated the metric.
   the same superposition, then measure the minimum distance from any 8AZ atom to any
   design heavy atom, **excluding the catalytic Zn**. The Zn coordinates the target
   base at ~2.12 A as a matter of correct catalytic geometry, not a clash; counting it
-  makes a correctly-placed metal read as a collapsed cleft. Gated **relative to each
-  parent's own measured clearance** (`constants.CLEFT_CLEARANCE_MARGIN = 0.3` A), not
-  against an absolute floor — native substrate H-bond contacts sit at 2.2-2.4 A, so an
-  absolute floor near that range leaves no real headroom on the parents themselves.
-  Measured on the committed references (Zn excluded): crystal `chainF_raw.pdb` vs
-  itself 2.330 A (closest protein atom Arg111:NH1), TadA8e 2.211 A, TadA9 2.271 A. A
-  design fails when its own clearance is worse than its parent's by more than the
-  margin — the specific failure the `MIN` arm is exposed to.
+  makes a correctly-placed metal read as a collapsed cleft.
+
+  > **CORRECTION 2026-08-08 (final-review fix).** This text previously said clearance is
+  > "gated relative to each parent's own measured clearance" — that was never true of the
+  > shipped code and contradicted it. `score_folds.gate()` checks only pLDDT and motif
+  > RMSD; it never reads `cleft_clearance` at all. `cleft_clearance` **is measured and
+  > recorded** in `fold_screen.tsv` for every design (see `score_folds.score_one`), and
+  > `constants.CLEFT_CLEARANCE_MARGIN = 0.3 Å` exists and is exercised by
+  > `test_score_structure.py`, but nothing in the fold stage currently compares a design's
+  > clearance to its parent's and rejects on it. Wiring that in is a scope decision for a
+  > future task, not a cleanup — it is deliberately NOT done here.
+  >
+  > **Second-order caveat.** The recorded parent clearances below (2.211 Å / 2.271 Å) are
+  > computed by `cleft_clearance`, which superposes through the same `_anchor_arrays` as
+  > `motif_rmsd` — i.e. they are **anchor-derived**, exactly like the CORE motif RMSD
+  > figures this doc revises elsewhere. `constants.py`'s `CLEFT_CLEARANCE_MARGIN` comment
+  > recording these values dates to commit `91d3041`, which **predates** the
+  > `ANCHOR_OUTLIER_CUTOFF` iterative-refinement fix (`ad88b35`/`7cb69e4`); it was never
+  > re-verified or re-recorded against the fixed anchor. (`test_score_structure.py`'s
+  > `test_both_relaxed_parents_clear_their_own_cleft_gate` does independently reproduce
+  > 2.211/2.271 Å against the CURRENT, fixed anchor, so the numbers themselves are not
+  > shown to be wrong — but the comment's own provenance predates the fix, which is the
+  > same documentation gap the backbone-filter caveat below already flags for
+  > `BACKBONE_MOTIF_RMSD_MAX = 1.0 Å`: a value coupled to `_anchor_arrays`'s internals that
+  > must be re-verified, not assumed, if that function changes again.) Cross-reference:
+  > "Backbone filter caveat" below.
+  >
+  > **Net effect on this stage's gates**: with motif RMSD re-roled as a gross-failure catch
+  > (not a ranking metric, see below) and cleft clearance not wired into `gate()` at all,
+  > the fold stage currently has **one working geometric gate** (motif RMSD), not two.
+
+  Measured on the committed references (Zn excluded; see the anchor-provenance caveat above):
+  crystal `chainF_raw.pdb` vs
+  itself 2.330 A (closest protein atom Arg111:NH1), TadA8e 2.211 A, TadA9 2.271 A.
+  `CLEFT_CLEARANCE_MARGIN` defines what "worse than the parent's clearance by more than
+  the margin" would mean — the specific failure the `MIN` arm is exposed to — but per the
+  correction above, no code currently evaluates that comparison and rejects on it; the
+  quantity is recorded for every design, not gated.
 
 #### The active-site gate defect and its fix (2026-08-06 / 2026-08-08)
 
@@ -316,8 +346,9 @@ The CORE fix above removed the disordered tail from what gets *measured* but lef
 the *superposition anchor* (`score_structure._anchor_arrays` defaulted to every shared
 Cα). Kabsch is a least-squares fit, so a tail deviating 9–36 Å from the crystal still
 dragged the fit that was supposed to be the core's own reference frame. Under that
-unfixed anchor, re-measured 2026-08-08 through the actual production code path
-(`reference_baseline.py`, baseline job 238437), the parent measured **TadA8e 3.555 Å,
+unfixed anchor, re-measured 2026-08-08 against the production fold output
+(`reference_baseline.py`'s fold, baseline job 238437 — see the provenance correction
+below), the parent measured **TadA8e 3.555 Å,
 TadA9 3.523 Å against a 2.1 Å gate — failing its own gate — while 4 of 21 debug designs
 passed.** This is the identical defect as Defect 1, in the other half of the same
 calculation: the measured-set fix and the anchor fix were the same fix, and only one
@@ -334,13 +365,32 @@ measurement across candidate cutoffs (1.0/2.5/3.0/5.0/8.0/15.0/20.0/50.0 Å), no
 guessed: it sits in the flat, low-RMSD plateau and matches an independently-anchored
 control (a fixed CA 5–150 span, excluding the tail by construction) to within 0.03 Å.
 
-**Final, verified numbers** (production code path, 2026-08-08):
+**Final, verified numbers** (2026-08-08):
 
 | Quantity | Value |
 |---|---|
 | Parents vs crystal, CORE | TadA8e 1.354 Å, TadA9 1.357 Å — both PASS |
 | `MOTIF_RMSD_MAX` | 2.0 Å = max(1.354, 1.357) + 0.563 Å fold-to-fold jitter = 1.920 Å floor, one tick above |
 | 21 probe designs, CORE | min 1.296, median 1.517, max 1.713 Å — **21/21 pass** |
+
+> **PROVENANCE CORRECTION 2026-08-08 (final-review fix).** This section and the log
+> previously said these parent numbers were measured "through the actual production
+> code path (`reference_baseline.py`)". That was **not true**: `reference_baseline.py`
+> folds both parents and records pLDDT, but at the time contained no call to
+> `score_structure.motif_rmsd` at all — the 1.354/1.357 Å figures above were computed by
+> a separate, unversioned probe script that read `reference_baseline.py`'s fold output
+> (`baseline/{parent}__fold.cif`, job 238437) and ran the cutoff sweep by hand (see
+> `.superpowers/sdd/2026-08-06-tada-redesign-part3a-gatefix/task-3b-report.md`). That is
+> exactly the provenance failure this branch faults the retired 1.468 Å figure for
+> ("never reproducible through the code the campaign actually runs" — see
+> `test_motif_threshold_exceeds_the_parents_own_offset_and_jitter`'s own docstring). Fixed
+> here: `reference_baseline.py` now scores each parent's CORE motif RMSD against
+> `constants.RMSD_REFERENCE` via `score_structure.motif_rmsd` (after `align_numbering`) —
+> the identical path `score_folds.score_one` uses for every design — and a `--score-only`
+> flag scores an existing baseline CIF without re-folding. Re-run against the SAME
+> existing `baseline/{TadA8e,TadA9}__fold.cif` (job 238437), it reproduces **1.3542 Å /
+> 1.3568 Å** exactly. These numbers are now reproducible from committed code
+> (`python -m tada_redesign.reference_baseline --score-only`), not from a side-script.
 
 **The central finding, stated plainly — this is not a success story.** With the
 corrected anchor, the 21 designs span 1.30–1.71 Å against a parent measuring 1.35 Å with
@@ -368,7 +418,18 @@ Full detail, including the per-cutoff measurement table: `constants.py`'s
 `ANCHOR_OUTLIER_CUTOFF`/`MOTIF_RMSD_MAX` comments and
 `docs/plans/2026-08-06-tada-redesign-part3a-gatefix.md` ("Correction, 2026-08-08").
 
-### Stage 4 — Rosetta (survivors)
+### Stage 4 — Rosetta (~~survivors~~ 2026-08-08: nearly all 10,542, see below)
+
+> **CORRECTION 2026-08-08 (final-review fix).** "survivors" and the "~2,000 designs"
+> compute budget below both inherit from the retired two-tier screen, where a ~1.5 Å
+> gate on reduced-sampling folds was expected to reject most designs before the
+> expensive full-sampling/Rosetta stages. That premise is gone: at the current
+> `MOTIF_RMSD_MAX = 2.0 Å` gross-failure-catch threshold, the measured 21-probe pass
+> rate is **21/21**. The honest projection for Stage 4's input is therefore **~10,542
+> designs** (the full fold-stage population), not ~2,000 — a **~5×** miss versus the
+> budget below. This follows directly from the gate no longer being selective (see
+> "The central finding" above), not from a new measurement of the full 10,542-design
+> fold; stated as a projection, not a re-derived compute number.
 
 Relax each survivor's full-sampling model with explicit Zn constraints; both parents
 travel the **identical** ESMFold2→relax path. Comparing a designed *prediction*
@@ -414,8 +475,10 @@ one relaxed PDB per finalist. Any fallback or truncation prints itself.
 `reference_baseline.py` · `score_rosetta.py` · `prep_af3.py` · `correlate.py` ·
 `rank.py` · `report.py` · `preflight.py` · `tests/`
 
-SLURM: `rfd_partial.slurm` · `run_ligandmpnn.slurm` · `fold_screen.slurm` (array) ·
-`fold_full.slurm` · `score_rosetta.slurm` (array, no `--gres`) · `af3_infer.slurm`
+SLURM: `rfd_partial.slurm` · `run_ligandmpnn.slurm` · `fold_screen.slurm` (array,
+single full-sampling fold; `~~fold_full.slurm~~` does not exist and never
+shipped — a leftover from the retired two-tier screen/re-fold split, corrected
+2026-08-08) · `score_rosetta.slurm` (array, no `--gres`) · `af3_infer.slurm`
 (array) · `merge_*.sh`.
 
 ## Data flow
@@ -493,7 +556,7 @@ by measured values before any batch is submitted.
 | LigandMPNN | 512 backbones × 4 temps | `gpu`, 1×H100; `denovo_tada` measured ~1 h per 64 backbones per temperature sweep, so this stage shards by backbone |
 | ~~ESMFold2 screen~~ | ~~10,752 folds, reduced sampling~~ — **SUPERSEDED 2026-08-06**, see Stage 3: reduced sampling's 2.020 Å parent-vs-parent noise floor at the core (vs. 0.563 Å full) made it unusable as a gate, not merely noisier | — |
 | ESMFold2, single full-sampling tier | 10,542 designs (production run `20260806_tada_redesign_gen1`; 210 short of the spec's 10,752 due to per-cell yield, not truncation) folded once each, `num_loops=20`/`num_sampling_steps=100` | `gpu`, sharded array, `FOLD_SHARDS = 11` × `FOLD_BATCH_SIZE = 1000` (44×250 in the original plan; each shard pays the ESMFold2 model-load cost once, so fewer/larger shards cut load overhead from ~29 GPU-h to ~7.3 GPU-h under contention) — measured ~11.5 GPU-hours of folding. **The full 11-shard screen has NOT been submitted**; only a 21-design debug shard (`gatefix_probe`) has run. |
-| Rosetta | ~2,000 designs × 3 replicates | `gpu` partition **without** `--gres`, CPU-only array |
+| Rosetta | ~~~2,000 designs × 3 replicates~~ — **CORRECTED 2026-08-08**: that figure assumed the retired two-tier screen would reject most designs before this stage; at the current gate's measured 21/21 pass rate the honest projection is **~10,542 designs × 3 replicates** (~5× the original budget) | `gpu` partition **without** `--gres`, CPU-only array |
 | AF3 | ~300 single-sequence + ligand | `gpu`, 1×H100, array |
 
 ## Repository mechanics

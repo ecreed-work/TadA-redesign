@@ -244,8 +244,9 @@ Tasks 1-3 removed the disordered tail from the **measured** set but left it in t
 **superposition anchor**: `score_structure._anchor_arrays` defaulted to every shared
 Cα, and Kabsch is least-squares, so the tail (deviating 9-36 Å from the crystal) still
 dragged the fit that was supposed to be the core's own reference frame. Re-measured
-2026-08-08 through the actual production code path (`reference_baseline.py`, baseline
-job **238437**, COMPLETED 00:03:22, pLDDT 0.897/0.888):
+2026-08-08 against the production fold output (`reference_baseline.py`'s fold, baseline
+job **238437**, COMPLETED 00:03:22, pLDDT 0.897/0.888) — see the 2026-08-08 provenance
+correction below for how the RMSD itself was actually computed at the time:
 
 - **Parent vs crystal, CORE, under the unfixed all-CA anchor: TadA8e 3.555 Å, TadA9
   3.523 Å — both FAIL the 2.1 Å gate Task 3 had derived**, while 4/21 debug designs
@@ -277,8 +278,8 @@ self-fitting.
 
 ### The derived threshold, with its arithmetic
 
-Final, verified numbers, measured through the production code path after the anchor
-fix (baseline job 238437; probe folds job 238335, `gatefix_probe/`):
+Final, verified numbers after the anchor fix (baseline job 238437; probe folds job
+238335, `gatefix_probe/`):
 
 - Parents vs crystal, CORE: **TadA8e 1.354 Å, TadA9 1.357 Å — both PASS.**
 - `MOTIF_RMSD_MAX = 2.0 Å` = max(1.354, 1.357) + 0.563 Å fold-to-fold jitter = **1.920 Å
@@ -286,6 +287,21 @@ fix (baseline job 238437; probe folds job 238335, `gatefix_probe/`):
 - 21 probe designs, CORE: min 1.296, median 1.517, max 1.713 Å — **21/21 pass.**
 - Test suite: **160 passed, 1 deselected** (run by the repo owner; not re-run here per
   the task brief).
+
+**PROVENANCE CORRECTION (2026-08-08, final-review fix).** This entry originally said
+the parent numbers above were measured "through the actual production code path
+(`reference_baseline.py`)". That was inaccurate: `reference_baseline.py` at the time
+folded both parents and recorded pLDDT, but never called `score_structure.motif_rmsd` —
+the 1.354/1.357 Å figures (and the whole cutoff-sweep table above) were produced by a
+separate, unversioned probe script that merely read `reference_baseline.py`'s fold
+output (`baseline/{parent}__fold.cif`, job 238437) and ran the sweep by hand (see
+`.superpowers/sdd/2026-08-06-tada-redesign-part3a-gatefix/task-3b-report.md`). This is
+the identical provenance failure this task faulted the retired 1.468 Å figure for.
+Fixed: `reference_baseline.py` now computes each parent's CORE motif RMSD itself (via
+`score_structure.motif_rmsd` + `align_numbering`, the same path `score_folds.score_one`
+uses for a design) and a `--score-only` flag scores an already-existing baseline CIF
+without re-folding. Re-run against the SAME job-238437 CIFs, it reproduces **1.3542 Å /
+1.3568 Å** exactly — the numbers are now reproducible from committed code.
 
 ### Backbone filter re-score — repo-owner ruling: keep the 502
 
