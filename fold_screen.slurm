@@ -1,7 +1,7 @@
 #!/bin/bash
 # ESMFold2 screen over designs.tsv, one array task per shard. Each task folds its
 # shard in ONE process so the model load is amortised (see fold_many.py).
-#   SHARDS=44 sbatch --array=1-44 fold_screen.slurm
+#   SHARDS=11 sbatch --array=1-11 fold_screen.slurm
 # Set -t from the measured amortised cost in fold_probe/timing.json, with margin.
 #SBATCH --job-name=tada_fold_screen
 #SBATCH --partition=gpu
@@ -15,7 +15,7 @@ set -euo pipefail
 
 CONDA_BASE="/research_jude/rgs01_jude/groups/tsaigrp/projects/Genomics/common/miniforge3"
 SUB="/research/rgs01/home/clusterHome/ecreed/claude-proteindesign/tada-redesign"
-SHARDS="${SHARDS:-44}"
+SHARDS="${SHARDS:-11}"
 
 cd "$SUB"; mkdir -p logs
 unset PYTHONPATH

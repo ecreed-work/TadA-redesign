@@ -81,15 +81,18 @@ CA_BREAK_MAX = 4.2               # A between consecutive CA
 LENGTH_RANGE = (150, 175)        # residues
 ZN_DONOR_RANGE = (2.0, 2.6)      # A, Zn to each of its three donors
 
-SCREEN_PLDDT_MARGIN = 0.05       # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
+# Gate thresholds. MOTIF_RMSD_MAX is DERIVED from measured scatter, not assumed:
+# the unmodified parent measures 1.468 A against the crystal reference at full
+# sampling, with a 0.563 A median fold-to-fold jitter. A gate below that rejects
+# the parent. Set provisionally at 2.5 and re-derived in Task 3 of the gate-fix
+# plan from the designs' own full-sampling distribution.
+MOTIF_RMSD_MAX = 2.5
+PLDDT_MARGIN = 0.05              # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
 # The two folding models do NOT share a pLDDT scale: ESMFold2 reports 0-1,
-# AF3 reports 0-100. SCREEN_PLDDT_MARGIN is expressed on ESMFold2's scale;
-# any AF3 comparison must scale by AF3_PLDDT_SCALE / ESMFOLD_PLDDT_SCALE first.
+# AF3 reports 0-100. PLDDT_MARGIN is expressed on ESMFold2's scale; any AF3
+# comparison must scale by AF3_PLDDT_SCALE / ESMFOLD_PLDDT_SCALE first.
 ESMFOLD_PLDDT_SCALE = 1.0
 AF3_PLDDT_SCALE = 100.0
-SCREEN_MOTIF_RMSD_MAX = 1.5      # A, looser: reduced sampling is noisier
-FINAL_MOTIF_RMSD_MAX = 1.0       # A, full sampling / AF3
-SCREEN_SURVIVORS = 2000          # compute decision; the dropped count is logged
 # Cleft openness is gated RELATIVE to the parent's own measured clearance, not
 # against an absolute floor. Measured on the committed references with the Zn
 # excluded (8AZ = 6VPC chain D 26): TadA8e 2.211 A, TadA9 2.271 A, and the
@@ -111,12 +114,16 @@ ROSETTA_REPLICATES = 3
 DEGRADED_FRACTION = 0.20
 
 # --------------------------------------------------------------- fold budgets
-# Screen settings are the ones verified working in the 2026-08-04 debug fold.
-# Reduced sampling depresses pLDDT substantially (that fold returned 0.45 on a
-# 78-mer), which is why the parent is folded in the IDENTICAL mode and the gate
-# is relative to it.
-ESMFOLD_SCREEN = {"num_loops": 4, "num_sampling_steps": 20}
-ESMFOLD_FULL = {"num_loops": 20, "num_sampling_steps": 100}
+# ONE sampling setting. The two-tier screen (reduced sampling, then re-fold
+# survivors at full) was retired on 2026-08-06 measurement: the parent-vs-parent
+# noise floor at the core motif is 2.020 A at reduced sampling versus 0.563 A at
+# full -- 3.6x worse, and above any threshold that could admit the parent.
+# pLDDT was FLAT between the modes (0.899-0.908 full, 0.835-0.902 screen), so a
+# confidence check alone said they were equivalent; confidence and structural
+# reproducibility are different quantities. Full sampling costs 3.93 s/design
+# (~11.5 GPU-h for 10,542) against 1.79 s/design -- affordable, and load time
+# dominates wall clock anyway.
+ESMFOLD_SETTINGS = {"num_loops": 20, "num_sampling_steps": 100}
 
 # ------------------------------------------------------------------ DNA context
 # DNA context, measured 2026-08-05: chain D residues 23-29 are everything within
@@ -155,11 +162,14 @@ PARENT_SEQUENCE = {
 # folds many designs per invocation. FOLD_SHARDS is the SLURM array width;
 # FOLD_BATCH_SIZE is how many designs one process folds before exiting (a cap,
 # so a crash loses at most this much work).
-FOLD_BATCH_SIZE = 250
-FOLD_SHARDS = 44          # 44 shards of ~240 designs each (10542 / 44); this
-                          # count must stay >= ceil(n_designs / FOLD_BATCH_SIZE)
-                          # so no shard exceeds the batch cap -- re-derive if
-                          # the design count moves
+# Each shard pays the model load once: 22.4 s on a quiet node, measured at
+# 104.5 s and ~2400 s under contention. Shard COUNT therefore multiplies that
+# overhead while total fold cost stays fixed, so fewer, larger shards win.
+# 11 shards over 10,542 designs gives 958-959 each, under the batch cap.
+FOLD_BATCH_SIZE = 1000
+FOLD_SHARDS = 11          # this count must stay >= ceil(n_designs /
+                          # FOLD_BATCH_SIZE) so no shard exceeds the batch cap
+                          # -- re-derive if the design count moves
 
 ENV_TEST = "ligandmpnn_env"
 ENV_RFD3 = "cas9-pam-design"

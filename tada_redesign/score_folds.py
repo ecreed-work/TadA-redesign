@@ -6,11 +6,13 @@ this module adds neither.
 
 Three deliberate choices:
   - The pLDDT gate is RELATIVE to a parent folded in the same mode
-    (reference_baseline), because reduced sampling depresses pLDDT for
-    everything.
-  - The screen uses SCREEN_MOTIF_RMSD_MAX (1.5 A), looser than the final gate's
-    1.0 A, because reduced-sampling folds are noisier. Survivors are re-folded at
-    full sampling and re-gated at the tighter threshold in Part 3b.
+    (reference_baseline), because sampling depth can shift pLDDT for
+    everything at once.
+  - Motif RMSD is measured against motif.CORE_MOTIF, not the design's own
+    frozen arm: the arm is what was FROZEN during design, CORE is what gets
+    MEASURED here. The two-tier screen/full split was retired 2026-08-06 on
+    measured evidence (see constants.MOTIF_RMSD_MAX) in favour of a single
+    full-sampling fold gated at one threshold.
   - A `nan` measurement is a REJECTION with its own status, never a pass. Every
     comparison against nan is False in Python, so a naive `value > threshold`
     test silently admits broken measurements -- the exact shape of the defect
@@ -43,9 +45,9 @@ def gate(row, parent_plddt):
     plddt, rmsd = row["plddt"], row["motif_rmsd"]
     if _is_bad(plddt) or _is_bad(rmsd):
         return False, "unmeasurable"
-    if plddt < parent_plddt - constants.SCREEN_PLDDT_MARGIN:
+    if plddt < parent_plddt - constants.PLDDT_MARGIN:
         return False, "low_plddt"
-    if rmsd > constants.SCREEN_MOTIF_RMSD_MAX:
+    if rmsd > constants.MOTIF_RMSD_MAX:
         return False, "motif_drift"
     return True, "ok"
 
@@ -86,12 +88,15 @@ def main(argv=None):
     if not designs:
         raise SystemExit("[score_folds] designs.tsv is empty or missing")
     baseline = reference_baseline.read_baseline(
-        args.run_dir, require=[(p, "screen") for p in constants.PARENTS])
+        args.run_dir, require=list(constants.PARENTS))
 
     masks = motif.load_masks()
     az = substrate.substrate_xyz()
     refs = {p: score_structure.heavy_atoms_from_pdb(constants.RMSD_REFERENCE[p])
             for p in constants.PARENTS}
+    # d["arm"] is what was FROZEN during design (FULL or MIN); CORE_MOTIF is the
+    # fixed, arm-independent set that gets MEASURED here -- see motif.py.
+    core_residues = motif.arm_residues(motif.CORE_MOTIF, masks)
     shard_dir = os.path.join(args.run_dir, "fold_screen")
     out_path = os.path.join(args.run_dir, "fold_screen.tsv")
     if os.path.exists(out_path):
@@ -101,9 +106,8 @@ def main(argv=None):
     for d in designs:
         cif = os.path.join(shard_dir, f"{d['design_id']}.cif")
         metrics = os.path.join(shard_dir, f"{d['design_id']}.metrics.json")
-        scored = score_one(cif, metrics, refs[d["parent"]],
-                           motif.arm_residues(d["arm"], masks), az)
-        passed, status = gate(scored, baseline[(d["parent"], "screen")])
+        scored = score_one(cif, metrics, refs[d["parent"]], core_residues, az)
+        passed, status = gate(scored, baseline[d["parent"]])
         n_pass += passed
         io.append_row(out_path, {
             "design_id": d["design_id"], "backbone": d["backbone"],

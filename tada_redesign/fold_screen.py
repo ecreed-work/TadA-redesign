@@ -5,9 +5,10 @@ a shard's designs adjacent in designs.tsv, which makes a partial run easy to
 reason about; determinism means a resubmitted shard folds exactly the same
 designs, so `--skip-existing` composes correctly.
 
-The screen folds at ESMFOLD_SCREEN settings (reduced sampling). Those numbers
-depress pLDDT substantially, which is why the gate is RELATIVE to a parent
-folded in the identical mode -- see reference_baseline.
+Folds at constants.ESMFOLD_SETTINGS -- the single full-sampling setting every
+design uses since the two-tier screen was retired 2026-08-06. The gate is
+still RELATIVE to a parent folded in the identical mode -- see
+reference_baseline.
 
 Honesty ceiling: this module moves sequences to a GPU and files back. It measures
 nothing.
@@ -56,8 +57,8 @@ def main(argv=None):
 
     cmd = ["python", os.path.join(constants.MONOREPO, "tools/esmfold2/fold_many.py"),
            "--jobs", jobs, "--out-dir", shard_dir, "--ligand-ccd", constants.ZN_RESNAME,
-           "--num-loops", str(constants.ESMFOLD_SCREEN["num_loops"]),
-           "--num-sampling-steps", str(constants.ESMFOLD_SCREEN["num_sampling_steps"]),
+           "--num-loops", str(constants.ESMFOLD_SETTINGS["num_loops"]),
+           "--num-sampling-steps", str(constants.ESMFOLD_SETTINGS["num_sampling_steps"]),
            "--skip-existing"]
     print(f"[fold_screen] shard {args.shard}/{args.n_shards}: {len(mine)} designs")
     print("[fold_screen] " + " ".join(cmd), flush=True)

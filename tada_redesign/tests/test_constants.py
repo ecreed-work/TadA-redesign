@@ -46,18 +46,6 @@ def test_rfd_batch_product_equals_backbones_per_cell():
         constants.BACKBONES_PER_CELL
 
 
-def test_screen_rmsd_gate_is_looser_than_the_final_gate():
-    # Reduced-sampling folds are noisier; a screen gate tighter than the final
-    # one would discard designs the full-sampling fold would have kept.
-    assert constants.SCREEN_MOTIF_RMSD_MAX > constants.FINAL_MOTIF_RMSD_MAX
-
-
-def test_esmfold_screen_is_cheaper_than_full():
-    assert constants.ESMFOLD_SCREEN["num_loops"] < constants.ESMFOLD_FULL["num_loops"]
-    assert constants.ESMFOLD_SCREEN["num_sampling_steps"] < \
-        constants.ESMFOLD_FULL["num_sampling_steps"]
-
-
 def test_known_bad_pdb_is_recorded_so_preflight_can_forbid_it():
     assert "6vpc_dCas9_TadA8e.pdb" in os.path.basename(constants.KNOWN_BAD_PDB)
 
@@ -76,7 +64,7 @@ def test_plddt_scales_are_recorded_for_both_folding_models():
     would be a 20x error."""
     assert constants.ESMFOLD_PLDDT_SCALE == 1.0
     assert constants.AF3_PLDDT_SCALE == 100.0
-    assert constants.SCREEN_PLDDT_MARGIN < constants.ESMFOLD_PLDDT_SCALE
+    assert constants.PLDDT_MARGIN < constants.ESMFOLD_PLDDT_SCALE
 
 
 def test_env_modules_covers_every_env_the_campaign_uses():
@@ -120,3 +108,28 @@ def test_parent_sequences_come_from_contiguous_residues_5_to_160():
         assert sorted(by_resnum) == list(range(5, 161)), parent
         joined = "".join(by_resnum[r] for r in sorted(by_resnum))
         assert joined == constants.PARENT_SEQUENCE[parent], parent
+
+
+def test_single_sampling_setting_at_full_depth():
+    """The two-tier screen is retired. Measured 2026-08-06: reduced sampling has
+    a 2.020 A parent-vs-parent noise floor at the core motif, vs 0.563 A at full --
+    3.6x worse, and above any usable threshold. pLDDT was flat between the modes
+    (0.899-0.908 vs 0.835-0.902), so confidence alone could not reveal this."""
+    assert constants.ESMFOLD_SETTINGS == {"num_loops": 20, "num_sampling_steps": 100}
+    assert not hasattr(constants, "ESMFOLD_SCREEN")
+    assert not hasattr(constants, "ESMFOLD_FULL")
+
+
+def test_shard_count_reflects_load_dominated_cost():
+    """Each shard pays the model load once (22.4 s quiet, ~2400 s contended), so
+    shard COUNT multiplies that overhead while fold cost stays fixed."""
+    assert constants.FOLD_BATCH_SIZE == 1000
+    assert constants.FOLD_SHARDS == 11
+    assert constants.FOLD_SHARDS * constants.FOLD_BATCH_SIZE >= 10542
+
+
+def test_motif_threshold_exceeds_the_parents_own_offset_and_jitter():
+    """The gate must admit the unmodified parent, which measures 1.468 A against
+    the crystal reference at full sampling with a 0.563 A median fold-to-fold
+    jitter. A threshold below that rejects the parent and is meaningless."""
+    assert constants.MOTIF_RMSD_MAX > 1.468
