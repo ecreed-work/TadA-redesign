@@ -47,7 +47,7 @@ All measured 2026-08-06 on the production run. Do not re-derive; do not "improve
 | Dropped vs the FULL motif | 109, 148, 152, 153, 154, 156, 157 (DNA-face-only, terminal-adjacent) |
 | Noise floor, parent vs parent, CORE, **screen** sampling (10 pairs) | median **2.020 Å** (0.396–3.445) |
 | Noise floor, parent vs parent, CORE, **full** sampling (10 pairs) | median **0.563 Å** (0.314–2.821) |
-| Parent vs crystal reference, CORE | screen **1.414 Å**, full **1.468 Å** |
+| Parent vs crystal reference, CORE | ~~screen **1.414 Å**, full **1.468 Å**~~ — **SUPERSEDED 2026-08-08, see below** |
 | Parent vs crystal reference, FULL motif | **7.673 Å** (the defect) |
 | 21 debug designs vs crystal, CORE, screen sampling | median **2.844 Å** (1.626–3.157); 1/21 under 2.0 Å |
 | pLDDT, full sampling | 0.8992–0.9079 (screen: 0.835–0.902) |
@@ -55,6 +55,39 @@ All measured 2026-08-06 on the production run. Do not re-derive; do not "improve
 | Full-sampling cost, 10,542 designs | **~11.5 GPU-hours** of folding |
 | Model load | **22.4 s** quiet; measured at 104.5 s and ~2,400 s under contention |
 | Jobs behind these numbers | 234250 (screen scatter), 234277 (full scatter), 234216 (debug shard) |
+
+### Correction, 2026-08-08 — the anchor carried the same defect as the measured set
+
+Tasks 1–3 removed the disordered C-terminal residues from the **measured** set but left
+them in the **superposition anchor**. `_anchor_arrays` defaults to every shared CA and
+Kabsch is least-squares, so the tail — which deviates 9–36 Å from the crystal — drags the
+fit that is supposed to be the core's reference frame. The measured-set fix and the anchor
+fix are the same defect in the two halves of one calculation; only one half was repaired.
+
+Superseded rows above are left visible on purpose. The 1.414/1.468 Å parent figures came
+from a side-script, not from `reference_baseline.py`'s production path, and were never
+reproducible through the code the campaign actually runs. Re-measured 2026-08-08 through
+the production path (baseline job 238437, COMPLETED 00:03:22, pLDDT 0.897/0.888):
+
+| Quantity | all-CA anchor (shipped) | CA 5–150, tail excluded |
+|---|---|---|
+| TadA8e parent vs crystal, CORE | **3.555 Å** | 1.349 Å |
+| TadA9 parent vs crystal, CORE | **3.523 Å** | 1.359 Å |
+| 21 debug designs, CORE | median 2.791 (1.486–3.521) | median 1.515 (1.301–1.714) |
+| Pass at `MOTIF_RMSD_MAX = 2.1` | 4/21 | 21/21 |
+
+**The shipped path fails the unmodified parent at 3.55 Å against its own 2.1 Å gate while
+admitting 4 designs** — the original defect intact, now selecting on superposition noise.
+That the 1.35 Å is not self-fitting: a CORE-only anchor gives 1.319 Å and the independent
+133-residue 5–150 anchor gives 1.349 Å, agreeing to 0.03 Å. The fold's own per-residue
+confidence agrees — the tail scores pLDDT 29–48 against a 94.8 median.
+
+Two consequences. `MOTIF_RMSD_MAX = 2.1` was derived in Task 3 from the corrupted
+distribution and carries no meaning. And once the anchor is corrected the designs span
+1.30–1.71 Å against a parent at 1.35 Å with 0.563 Å fold-to-fold jitter: **the CORE site is
+preserved in all 21 and the gate does not discriminate among them.** That is a real result
+about the protocol, and it re-roles motif RMSD as a gross-failure catch rather than a
+ranking metric. Discrimination must come from the deferred stability stage.
 
 **Why the shard count changes.** Each shard pays the model load once, so shard COUNT multiplies load overhead. At 44 shards a contended run spends ~29 GPU-hours loading weights against ~11.5 folding. At 11 shards that overhead drops to ~7.3. Fold cost is unchanged.
 
@@ -420,6 +453,82 @@ EOF
 
 ---
 
+### Task 3b: Robust iterative superposition (added 2026-08-08)
+
+Added after Task 4 reported BLOCKED. Runs **before** Task 4 completes; existing task numbers
+are left alone so the ledger and commit history stay readable.
+
+**Files:**
+- Modify: `tada_redesign/score_structure.py`, `tada_redesign/constants.py`, `tada_redesign/tests/test_score_structure.py`
+
+- [ ] **Step 1: Implement robust iterative superposition**
+
+Replace the all-CA anchor with an iteratively refined one, in `_anchor_arrays` or a helper
+it calls. The scheme, decided by the repo owner 2026-08-08 over a fixed residue span:
+
+1. Start with every shared CA.
+2. Kabsch-fit on the current included set; compute each included residue's deviation.
+3. Drop residues deviating beyond the cutoff; refit.
+4. Repeat until the included set stops changing, capped at `ANCHOR_MAX_ITER = 10`.
+
+Cutoff: `ANCHOR_OUTLIER_CUTOFF`, a new constant in `constants.py`. **Derive it by
+measurement, do not guess** — report the retained-set size and the parent's resulting CORE
+RMSD for at least three candidate cutoffs and pick from that evidence. A correct cutoff puts
+both parents near 1.35 Å (the independently-anchored value) and retains the structured core.
+
+Two guards, each with a test:
+
+- **Self-fitting guard.** The retained anchor must not collapse onto the measured set — that
+  would shrink the reported quantity by construction. Require the retained set to keep at
+  least `ANCHOR_MIN_RETAINED_FRAC` (start at 0.60) of the shared CAs, and raise if it does not.
+- **Determinism.** Same inputs must give the same anchor and the same RMSD, every run.
+
+Keep the existing `anchor_residues=` override and the `>= 3 shared CA` check.
+
+- [ ] **Step 2: Measure the effect on `filter_backbones`, do NOT silently change it**
+
+`filter_backbones.py:162` calls `motif_rmsd` on RFD3 backbones against
+`BACKBONE_MOTIF_RMSD_MAX = 1.0`, and that gate has already run: **502 of 512 backbones
+passed, all 10 rejections `motif_drift` at `partial_t=6.0` in MIN cells.** Re-score those
+512 backbones under the new superposition and report whether the pass set changes.
+
+If it changes, STOP and report — retroactively moving a completed filter result is a
+campaign-level decision, not an implementation detail. If it does not change, say so with
+the re-measured count.
+
+**It changed, and the repo owner ruled on 2026-08-08: keep the 502.** Re-measured
+independently: **502 → 506**, seven `motif_drift` rejections becoming passes and three
+passes becoming rejections, all ten inside `TadA8e_MIN_pt6.0` / `TadA9_MIN_pt6.0` and all
+marginal (old 0.881–1.265 against the 1.0 Å gate; the seven that improved did so sharply,
+e.g. 1.265 → 0.628, the signature of a corrupted frame being repaired).
+
+Anchor retention on backbones: **100% at `partial_t` 1.0 and 2.0** — the new fit is
+numerically identical to the old one there — falling to a minimum of 0.821 at `pt6.0`,
+still well clear of the 0.60 floor. The change is a no-op outside the highest-noise cells.
+
+`backbones.tsv` and `filter_backbones.py` are NOT re-run. The 502 already seeded LigandMPNN
+and the 10,542 designs; regenerating for a 0.8% change in the seed set is not worth the GPU
+time, and the fold-stage gate is the filter that actually selects.
+
+**Carry this caveat forward:** `BACKBONE_MOTIF_RMSD_MAX = 1.0` was itself derived under the
+superseded superposition, so it is now calibrated against a retired metric. It must be
+re-derived before any future generation round — leaving it as-is is a deliberate, recorded
+choice for THIS round's already-generated designs, not an endorsement of the constant.
+
+- [ ] **Step 3: Re-derive `MOTIF_RMSD_MAX` as a gross-failure catch**
+
+The repo owner's ruling, 2026-08-08: the gate catches designs whose core actually collapsed;
+it does **not** rank. Derive it from the parent's own value plus fold-to-fold jitter
+(0.563 Å), state the arithmetic in the constant's comment, and record the resulting pass
+count on the 21 probes.
+
+A high pass rate is the honest finding that freezing the motif worked — report it as a
+measurement. **Do not tune the threshold toward a target pass fraction**; with the whole
+distribution inside fold-to-fold jitter that would rank noise and present it as active-site
+quality. Retire the "designs must be distinguishable" framing from Task 4 Step 2: this task
+establishes that ESMFold2 cannot resolve design-vs-parent differences at the CORE site, so
+real discrimination belongs to the deferred stability stage.
+
 ### Task 4: Prove the gate discriminates, then update the spec and log
 
 **Files:**
@@ -446,7 +555,11 @@ Report all four numbers together:
 
 **The gate is only fixed if the parent passes.** If it does not, STOP and report BLOCKED — a threshold that rejects the unmodified parent is the exact defect this plan exists to remove, and shipping one would be worse than the original bug because it would look like it had been fixed.
 
+*This rule did its job on 2026-08-08: the parent measured 3.55 Å against the 2.1 Å gate, the task reported BLOCKED rather than shipping, and Task 3b exists because of it.*
+
 Also report honestly whether designs and parent are *distinguishable*. If the design median sits within the parent's fold-to-fold jitter, say so plainly: it means ESMFold2 cannot resolve a difference between them at the active site, which is a real limitation of the readout, not a pass.
+
+**Superseded by Task 3b Step 3 (2026-08-08).** The answer is now measured and settled: they are NOT distinguishable — designs span 1.30–1.71 Å against a parent at 1.35 Å with 0.563 Å jitter. Task 4 records that finding rather than re-testing for it.
 
 - [ ] **Step 3: Update the spec**
 

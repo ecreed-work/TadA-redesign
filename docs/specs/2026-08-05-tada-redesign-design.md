@@ -217,30 +217,70 @@ Total designs entering Stage 3 is therefore **10,752** (10,240 biased + 512 cont
 The control set is reported separately and is eligible for the shortlist — if
 unbiased designs win, that is a finding, not an error.
 
-### Stage 3 — ESMFold2 screen (all 10,752) → survivors re-folded
+### Stage 3 — ESMFold2 fold and gate
 
-Screen at reduced sampling (`num_loops=4`, `num_sampling_steps=20` — the settings
-verified working in the 2026-08-04 debug fold); full sampling is the wrapper's default
-`num_loops=20`, `num_sampling_steps=100`. Reduced sampling **depresses pLDDT
-substantially** (the debug fold returned 0.45 on a 78-mer for this reason), so the
-parent is folded in the **identical** reduced mode and the gate is relative to it.
-Gates:
+> **SUPERSEDED 2026-08-06/2026-08-08 — retired design kept visible, not rewritten away.**
+> The design originally shipped here was a **two-tier screen**: fold all 10,752 designs
+> at reduced sampling (`num_loops=4`, `num_sampling_steps=20`), gate at
+> ~~`SCREEN_MOTIF_RMSD_MAX = 1.5 Å`~~ (deliberately looser than a ~~`FINAL_MOTIF_RMSD_MAX`~~
+> final tier because reduced sampling was assumed noisier), take the top ~2,000
+> survivors, and re-fold only those at full sampling (`num_loops=20`,
+> `num_sampling_steps=100`) before the numbers that carry forward. The stated reason for
+> reduced sampling was that it "depresses pLDDT substantially" — based on one 2026-08-04
+> debug fold of a 78-mer that returned pLDDT 0.45.
+>
+> **That rationale was measured and refuted on 2026-08-06.** Both parents folded in
+> both modes came back essentially flat: TadA8e full 0.8968 / screen 0.9005; TadA9 full
+> 0.8882 / screen 0.8900 — under 0.004 apart, with screen mode very slightly *higher*.
+> The 0.45 outlier reflected that one peptide's difficulty, not the sampling setting.
+> Worse, the parent-vs-parent **structural** (not confidence) noise floor at the core
+> motif is **2.020 Å median at screen sampling vs 0.563 Å at full** — 3.6× worse — and
+> designs (2.844 Å) sat inside that band, so no threshold on the screen tier could ever
+> separate design quality from seed jitter. **Confidence and structural reproducibility
+> are different quantities**; an earlier ruling in this campaign generalised from the
+> first to the second and was wrong to. The two-tier screen is retired: **every design
+> is now folded once, at full sampling**, and `SCREEN_MOTIF_RMSD_MAX`/
+> `FINAL_MOTIF_RMSD_MAX`/`SCREEN_PLDDT_MARGIN`/`SCREEN_SURVIVORS` are deleted from
+> `constants.py` rather than aliased, so a stale reference fails loudly. Shard sizing
+> changed with it: `FOLD_BATCH_SIZE` 250→1000, `FOLD_SHARDS` 44→11 — each shard pays the
+> ESMFold2 model load once (22.4 s quiet, measured up to ~2,400 s under cluster
+> contention), so shard *count* multiplies that overhead while fold cost itself is
+> unchanged (~11.5 GPU-hours full-sampling for 10,542 designs).
+>
+> A second, deeper defect was found and fixed after the first: see the CORE motif set
+> and the superposition-anchor correction below.
 
-- pLDDT ≥ `parent_screen_plddt − 0.05` (0–1 scale)
-- motif heavy-atom RMSD ≤ **1.5 Å** — deliberately looser than the final gate, because
-  reduced sampling is noisier
+Every design is folded once, at full sampling (`num_loops=20`, `num_sampling_steps=100`).
+The parent is folded through the identical path (`reference_baseline.py`, one fold per
+parent — the mode axis is gone) and the gate is relative to it. Gate:
 
-Top ~2,000 survive. **The cap is a compute decision, and the dropped count is logged**
-(no silent truncation). Survivors are re-folded at full sampling, and only the
-full-sampling numbers carry forward.
+- pLDDT ≥ `parent_plddt − PLDDT_MARGIN` (`PLDDT_MARGIN = 0.05`, 0–1 scale)
+- motif heavy-atom RMSD, measured over `motif.CORE_MOTIF` (see below), ≤
+  `constants.MOTIF_RMSD_MAX = 2.0 Å` — a single tier, derived from measured scatter
+  (arithmetic in "The gate defect and its fix," below), not assumed.
+
+**The active-site gate measures `motif.CORE_MOTIF`, not the design's own frozen arm
+(`FULL`/`MIN`).** The arm is what gets FROZEN during diffusion and sequence design;
+CORE is a fixed 17-residue subset (`CATALYTIC ∪ POCKET`, intersected with `MODELED`:
+residues 28, 30, 46, 54, 57, 58, 59, 84, 85, 86, 87, 88, 90, 108, 110, 111, 149) that
+gets MEASURED when scoring a predicted structure, regardless of which arm generated it.
+Conflating the two was the original defect (below): the `FULL` arm's DNA-face residues
+sit near the disordered chain terminus, where a prediction and a relaxed crystal-derived
+reference diverge freely, and that divergence dominated the metric.
 
 `score_structure.py` is the one geometric scorer, shared by this stage and AF3:
 
-- **Heavy-atom motif RMSD** after Kabsch superposition on all designed Cα. Heavy-atom
-  is tractable precisely because motif identity is locked, so atom names match
+- **Heavy-atom motif RMSD** after Kabsch superposition, restricted to `motif.CORE_MOTIF`.
+  Heavy-atom is tractable precisely because motif identity is locked, so atom names match
   one-to-one — an upgrade over the Cα-only compromise `gate_fold.py` had to accept.
   Superposing on the full backbone rather than on the measured motif is deliberate:
-  fitting on the measured points trivially shrinks whatever is measured.
+  fitting on the measured points trivially shrinks whatever is measured. **The
+  superposition anchor is now an iteratively outlier-rejecting refinement of every
+  shared Cα** (`ANCHOR_OUTLIER_CUTOFF = 5.0 Å`, capped at `ANCHOR_MAX_ITER = 10`
+  iterations, with a self-fitting guard requiring at least `ANCHOR_MIN_RETAINED_FRAC =
+  0.60` of shared Cα retained) rather than an unfiltered all-Cα fit — see "The gate defect
+  and its fix" below for why the unfiltered anchor was itself a second instance of the
+  same defect Task 1 fixed in the measured set.
 - Tetrad-only RMSD, reported alongside.
 - Zn coordination via `relax_scaffolds.check_zn_geometry`.
 - **Cleft openness**: map the crystal 8AZ coordinates into the design frame through
@@ -255,6 +295,78 @@ full-sampling numbers carry forward.
   itself 2.330 A (closest protein atom Arg111:NH1), TadA8e 2.211 A, TadA9 2.271 A. A
   design fails when its own clearance is worse than its parent's by more than the
   margin — the specific failure the `MIN` arm is exposed to.
+
+#### The active-site gate defect and its fix (2026-08-06 / 2026-08-08)
+
+This gate shipped broken **twice**, and both defects were caught by the same control:
+folding and measuring the **unmodified parent** the same way the gate measures a design.
+A threshold the parent itself cannot pass is meaningless — it means the metric cannot
+distinguish a redesigned protein from the original.
+
+**Defect 1 — the measured set included the disordered chain terminus.** The original
+`FULL`-motif measurement scored the unmodified parent at **7.673 Å** against a 1.5 Å
+gate. Root cause: residue 156's ring atoms deviate 19–23 Å between a predicted structure
+and the relaxed crystal reference — free-flapping near the chain end — swamping a
+202-atom average. Fix: `motif.CORE_MOTIF`, a 17-residue subset (`CATALYTIC ∪ POCKET`,
+intersected with `MODELED`) that excludes the DNA-face/terminal-adjacent residues (109,
+148, 152, 153, 154, 156, 157). This dropped the parent to a then-measured 1.414/1.468 Å.
+
+**Defect 2 — the superposition anchor carried the same defect as the measured set.**
+The CORE fix above removed the disordered tail from what gets *measured* but left it in
+the *superposition anchor* (`score_structure._anchor_arrays` defaulted to every shared
+Cα). Kabsch is a least-squares fit, so a tail deviating 9–36 Å from the crystal still
+dragged the fit that was supposed to be the core's own reference frame. Under that
+unfixed anchor, re-measured 2026-08-08 through the actual production code path
+(`reference_baseline.py`, baseline job 238437), the parent measured **TadA8e 3.555 Å,
+TadA9 3.523 Å against a 2.1 Å gate — failing its own gate — while 4 of 21 debug designs
+passed.** This is the identical defect as Defect 1, in the other half of the same
+calculation: the measured-set fix and the anchor fix were the same fix, and only one
+half had been applied. Task 4's own STOP rule ("the gate is only fixed if the parent
+passes") caught this and reported BLOCKED rather than shipping a gate that looked fixed
+but wasn't.
+
+**The fix:** `_anchor_arrays` now iteratively refines the anchor — Kabsch-fit on the
+current included Cα set, drop residues deviating beyond `ANCHOR_OUTLIER_CUTOFF = 5.0 Å`,
+refit, repeat until the set stops changing (capped at `ANCHOR_MAX_ITER = 10`) — with a
+self-fitting guard (`ANCHOR_MIN_RETAINED_FRAC = 0.60`) that raises rather than silently
+returning an anchor that has collapsed onto the measured set. `5.0 Å` was chosen by
+measurement across candidate cutoffs (1.0/2.5/3.0/5.0/8.0/15.0/20.0/50.0 Å), not
+guessed: it sits in the flat, low-RMSD plateau and matches an independently-anchored
+control (a fixed CA 5–150 span, excluding the tail by construction) to within 0.03 Å.
+
+**Final, verified numbers** (production code path, 2026-08-08):
+
+| Quantity | Value |
+|---|---|
+| Parents vs crystal, CORE | TadA8e 1.354 Å, TadA9 1.357 Å — both PASS |
+| `MOTIF_RMSD_MAX` | 2.0 Å = max(1.354, 1.357) + 0.563 Å fold-to-fold jitter = 1.920 Å floor, one tick above |
+| 21 probe designs, CORE | min 1.296, median 1.517, max 1.713 Å — **21/21 pass** |
+
+**The central finding, stated plainly — this is not a success story.** With the
+corrected anchor, the 21 designs span 1.30–1.71 Å against a parent measuring 1.35 Å with
+a 0.563 Å fold-to-fold jitter. **The frozen motif worked — the CORE site is preserved in
+all 21 — but ESMFold2 cannot resolve a design-from-parent difference at the active
+site.** Motif RMSD is therefore re-roled as a **gross-failure catch, not a ranking
+metric** (repo owner's ruling, 2026-08-08): a design whose core has genuinely collapsed
+will still fail this gate, but a passing score says nothing about whether a design is
+better, worse, or different from its parent. Real discrimination between designs must
+come from the deferred stability stage (Rosetta Δ, Stage 4), not from this geometry gate.
+
+**Backbone filter caveat (`filter_backbones.py`, `BACKBONE_MOTIF_RMSD_MAX = 1.0 Å`).**
+That gate had already run against the unfixed anchor: 502/512 backbones passed.
+Re-scored under the corrected anchor: 502→506, with all ten changed cells marginal
+(0.881–1.265 Å against the 1.0 Å gate) and confined to `partial_t=6.0` MIN cells — the
+noisiest corner of the design matrix. **Repo-owner ruling, 2026-08-08: keep the
+502-backbone set; `backbones.tsv` is NOT re-run** — the 502 already seeded LigandMPNN
+and the 10,542 downstream designs, and the fold-stage gate above is the filter that
+actually selects. `BACKBONE_MOTIF_RMSD_MAX = 1.0` was itself derived under the retired
+anchor and is therefore calibrated against a retired metric; it must be re-derived
+before any future generation round, and leaving it as-is is a recorded choice for this
+round's already-generated designs, not an endorsement of the constant.
+
+Full detail, including the per-cutoff measurement table: `constants.py`'s
+`ANCHOR_OUTLIER_CUTOFF`/`MOTIF_RMSD_MAX` comments and
+`docs/plans/2026-08-06-tada-redesign-part3a-gatefix.md` ("Correction, 2026-08-08").
 
 ### Stage 4 — Rosetta (survivors)
 
@@ -308,11 +420,15 @@ SLURM: `rfd_partial.slurm` · `run_ligandmpnn.slurm` · `fold_screen.slurm` (arr
 
 ## Data flow
 
+> **SUPERSEDED 2026-08-06.** ~~`→ [ESMFold2 screen] → fold_screen.tsv → [ESMFold2 full]
+> → fold_full.tsv`~~ — the two-tier screen/full split is retired (see Stage 3 above);
+> every design is folded once, at full sampling, into `fold_screen.tsv`.
+
 ```
 masks.json + reference PDBs
   → motif.py → rfd_inputs.yaml → [RFD3] → backbones/ → backbones.tsv
   → lmpnn_inputs.tsv → [LigandMPNN] → designs.tsv
-  → [ESMFold2 screen] → fold_screen.tsv → [ESMFold2 full] → fold_full.tsv
+  → [ESMFold2, single full-sampling pass] → fold_screen.tsv
   → [Rosetta] → rosetta.tsv
   → [AF3] → af3.tsv
   → correlation.md + shortlist.tsv + shortlist_structures/
@@ -375,8 +491,8 @@ by measured values before any batch is submitted.
 |---|---|---|
 | RFD3 partial | 16 cells × 32 backbones | `gpu`, 1×H100 per cell, array of 16 |
 | LigandMPNN | 512 backbones × 4 temps | `gpu`, 1×H100; `denovo_tada` measured ~1 h per 64 backbones per temperature sweep, so this stage shards by backbone |
-| ESMFold2 screen | 10,752 folds, reduced sampling | `gpu`, sharded array — **the dominant unknown**; if the measured per-fold cost makes 10,752 unaffordable, the documented fallback is to gate on MPNN score first and report exactly how many designs were dropped unfolded |
-| ESMFold2 full | ~2,000 folds, full sampling | `gpu`, sharded array |
+| ~~ESMFold2 screen~~ | ~~10,752 folds, reduced sampling~~ — **SUPERSEDED 2026-08-06**, see Stage 3: reduced sampling's 2.020 Å parent-vs-parent noise floor at the core (vs. 0.563 Å full) made it unusable as a gate, not merely noisier | — |
+| ESMFold2, single full-sampling tier | 10,542 designs (production run `20260806_tada_redesign_gen1`; 210 short of the spec's 10,752 due to per-cell yield, not truncation) folded once each, `num_loops=20`/`num_sampling_steps=100` | `gpu`, sharded array, `FOLD_SHARDS = 11` × `FOLD_BATCH_SIZE = 1000` (44×250 in the original plan; each shard pays the ESMFold2 model-load cost once, so fewer/larger shards cut load overhead from ~29 GPU-h to ~7.3 GPU-h under contention) — measured ~11.5 GPU-hours of folding. **The full 11-shard screen has NOT been submitted**; only a 21-design debug shard (`gatefix_probe`) has run. |
 | Rosetta | ~2,000 designs × 3 replicates | `gpu` partition **without** `--gres`, CPU-only array |
 | AF3 | ~300 single-sequence + ligand | `gpu`, 1×H100, array |
 

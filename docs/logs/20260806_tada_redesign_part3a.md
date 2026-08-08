@@ -212,3 +212,123 @@ does not attempt to explain why it does not.
 
 Co-Authored-By: Ethan Creed <ethan.creed@stjude.org>
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---
+
+## 2026-08-08 — Part 3a gate-fix (Tasks 1-4, 3b): the active-site gate shipped broken twice, now fixed and re-roled
+
+Plan: `docs/plans/2026-08-06-tada-redesign-part3a-gatefix.md`. Continues directly from
+the BLOCKED finding above (parent scored 7.673 Å against a 1.5 Å gate). This entry
+records both defects, the controls that exposed each, and the final, honest result.
+
+### Defect 1 — the measured motif included the disordered chain terminus
+
+The `FULL`-motif measurement above scored the **unmodified parent** at **7.673 Å**
+against a 1.5 Å gate. Root cause: residue 156's ring atoms deviate 19-23 Å between a
+predicted structure and the relaxed crystal reference — free-flapping near the chain
+end — dominating a 202-atom average. Fix (Task 1): `motif.CORE_MOTIF`, `CATALYTIC ∪
+POCKET` intersected with `MODELED` — 17 residues (28, 30, 46, 54, 57, 58, 59, 84, 85,
+86, 87, 88, 90, 108, 110, 111, 149), dropping 109, 148, 152, 153, 154, 156, 157. This
+took the parent from 7.673 Å to a then-measured 1.414/1.468 Å (screen/full).
+
+Task 2 also retired the two-tier reduced/full sampling screen: parent-vs-parent
+structural noise at the core is 2.020 Å median at reduced sampling vs 0.563 Å at full
+(3.6x worse), and pLDDT was flat between the two modes (0.899-0.908 vs 0.835-0.902) —
+confidence and structural reproducibility are different quantities, and a
+confidence-only check could not have revealed this. Shards: `FOLD_BATCH_SIZE` 250→1000,
+`FOLD_SHARDS` 44→11 (jobs 234250 screen scatter, 234277 full scatter).
+
+### Defect 2 — the superposition anchor carried the same defect, one level down
+
+Tasks 1-3 removed the disordered tail from the **measured** set but left it in the
+**superposition anchor**: `score_structure._anchor_arrays` defaulted to every shared
+Cα, and Kabsch is least-squares, so the tail (deviating 9-36 Å from the crystal) still
+dragged the fit that was supposed to be the core's own reference frame. Re-measured
+2026-08-08 through the actual production code path (`reference_baseline.py`, baseline
+job **238437**, COMPLETED 00:03:22, pLDDT 0.897/0.888):
+
+- **Parent vs crystal, CORE, under the unfixed all-CA anchor: TadA8e 3.555 Å, TadA9
+  3.523 Å — both FAIL the 2.1 Å gate Task 3 had derived**, while 4/21 debug designs
+  passed. This is the identical defect as Defect 1, in the other half of the same
+  calculation — the measured-set fix and the anchor fix were the same fix, and only one
+  half had been applied.
+- Task 4's own STOP rule ("the gate is only fixed if the parent passes") caught this
+  live and reported **BLOCKED** rather than shipping a gate that looked fixed but
+  wasn't (see the BLOCKED task-4-report entry this continues from). No spec/log edit
+  or push happened at that point.
+
+**The fix (Task 3b):** `_anchor_arrays` now does iterative outlier-rejecting
+refinement — Kabsch-fit on the current included Cα set, drop residues deviating beyond
+`ANCHOR_OUTLIER_CUTOFF = 5.0 Å`, refit, repeat until the included set stops changing,
+capped at `ANCHOR_MAX_ITER = 10` — with a self-fitting guard
+(`ANCHOR_MIN_RETAINED_FRAC = 0.60`) that raises rather than silently returning an
+anchor that has collapsed onto the measured set, plus a non-convergence raise. `5.0 Å`
+was chosen by measuring candidate cutoffs (1.0, 2.5, 3.0, 5.0, 8.0, 15.0, 20.0, 50.0 Å)
+against retained-fraction and resulting CORE RMSD, not guessed: it sits in the flat,
+low-RMSD plateau and the resulting parent value (1.354/1.357 Å) agrees with an
+independent, fixed CA 5-150 anchor (1.349/1.359 Å) to within 0.03 Å — i.e. it is not
+self-fitting.
+
+### The CORE definition (final, unchanged since Task 1)
+
+`motif.CORE_MOTIF` = `CATALYTIC ∪ POCKET`, intersected with `MODELED`: 17 residues —
+28, 30, 46, 54, 57, 58, 59, 84, 85, 86, 87, 88, 90, 108, 110, 111, 149 — spanning
+28-149, clear of the chain end at 160.
+
+### The derived threshold, with its arithmetic
+
+Final, verified numbers, measured through the production code path after the anchor
+fix (baseline job 238437; probe folds job 238335, `gatefix_probe/`):
+
+- Parents vs crystal, CORE: **TadA8e 1.354 Å, TadA9 1.357 Å — both PASS.**
+- `MOTIF_RMSD_MAX = 2.0 Å` = max(1.354, 1.357) + 0.563 Å fold-to-fold jitter = **1.920 Å
+  floor, one tick above.**
+- 21 probe designs, CORE: min 1.296, median 1.517, max 1.713 Å — **21/21 pass.**
+- Test suite: **160 passed, 1 deselected** (run by the repo owner; not re-run here per
+  the task brief).
+
+### Backbone filter re-score — repo-owner ruling: keep the 502
+
+`filter_backbones.py`'s `BACKBONE_MOTIF_RMSD_MAX = 1.0 Å` gate had already run against
+the unfixed anchor (502/512 backbones passed, all 10 rejections `motif_drift` at
+`partial_t=6.0` in `MIN` cells). Re-scored the same 512 backbones under the corrected
+anchor: **502 → 506** — seven `motif_drift` rejections became passes and three passes
+became rejections, all ten changes confined to `TadA8e_MIN_pt6.0`/`TadA9_MIN_pt6.0`
+and all marginal (old scores 0.881-1.265 Å against the 1.0 Å gate). **Repo-owner
+ruling, 2026-08-08: keep the 502-backbone set; `backbones.tsv` and
+`filter_backbones.py` are NOT re-run** — the 502 already seeded LigandMPNN and the
+10,542 downstream designs, and the fold-stage gate above is the filter that actually
+selects, not the backbone filter. **Caveat carried forward:**
+`BACKBONE_MOTIF_RMSD_MAX = 1.0` was itself derived under the now-retired anchor and is
+therefore calibrated against a retired metric; it must be re-derived before any future
+generation round. Leaving it as-is is a recorded choice for this round's
+already-generated designs, not an endorsement of the constant.
+
+### The central finding — not a success story
+
+With the corrected anchor, the 21 debug designs span **1.30-1.71 Å against a parent at
+1.35 Å with a 0.563 Å fold-to-fold jitter.** The frozen motif worked — the CORE site is
+preserved in all 21 — but **ESMFold2 cannot resolve a design-from-parent difference at
+the active site.** Motif RMSD is therefore re-roled as a **gross-failure catch, not a
+ranking metric** (repo owner's ruling, 2026-08-08): a design whose core has genuinely
+collapsed will still fail this gate, but a passing score says nothing about whether a
+design is better than, worse than, or different from its parent. 21/21 passing must
+not be read as evidence the designs were shown to be good — real discrimination between
+designs must come from the deferred Rosetta stability stage, not from this geometry
+gate.
+
+### Honesty ceiling
+
+Motif RMSD measures geometry; pLDDT measures model confidence. Neither is stability,
+solubility, or enzymatic activity, and no wet-lab validation has been performed anywhere
+in this campaign.
+
+### What has and has NOT been submitted
+
+Baseline fold job **238437** (COMPLETED, 00:03:22, pLDDT 0.897/0.888). Scatter jobs
+**234250** (screen) and **234277** (full), from Task 2. Debug/probe folds only —
+**the full 11-shard screen over all 10,542 designs has NOT been submitted.** No
+PyRosetta, RFdiffusion, or AlphaFold run occurred in this task.
+
+Co-Authored-By: Ethan Creed <ethan.creed@stjude.org>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
