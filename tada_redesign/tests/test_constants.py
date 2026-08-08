@@ -131,5 +131,12 @@ def test_shard_count_reflects_load_dominated_cost():
 def test_motif_threshold_exceeds_the_parents_own_offset_and_jitter():
     """The gate must admit the unmodified parent, which measures 1.468 A against
     the crystal reference at full sampling with a 0.563 A median fold-to-fold
-    jitter. A threshold below that rejects the parent and is meaningless."""
+    jitter. A threshold below that floor (1.468 + 0.563 ~= 2.03 A) rejects the
+    parent and is meaningless. MOTIF_RMSD_MAX = 2.1 sits on the floor branch of
+    the decision rule: the 21-design gatefix_probe distribution (job 238335) has
+    no shoulder above the floor, only a continuum from 2.20 to 3.52 A, so the
+    threshold is anchored just above the parent's own noise floor rather than at
+    a shoulder in the design scatter."""
+    floor = 1.468 + 0.563
     assert constants.MOTIF_RMSD_MAX > 1.468
+    assert constants.MOTIF_RMSD_MAX > floor

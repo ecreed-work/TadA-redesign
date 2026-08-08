@@ -81,12 +81,29 @@ CA_BREAK_MAX = 4.2               # A between consecutive CA
 LENGTH_RANGE = (150, 175)        # residues
 ZN_DONOR_RANGE = (2.0, 2.6)      # A, Zn to each of its three donors
 
-# Gate thresholds. MOTIF_RMSD_MAX is DERIVED from measured scatter, not assumed:
-# the unmodified parent measures 1.468 A against the crystal reference at full
-# sampling, with a 0.563 A median fold-to-fold jitter. A gate below that rejects
-# the parent. Set provisionally at 2.5 and re-derived in Task 3 of the gate-fix
-# plan from the designs' own full-sampling distribution.
-MOTIF_RMSD_MAX = 2.5
+# Gate thresholds. MOTIF_RMSD_MAX is DERIVED from measured scatter, not assumed.
+# Floor: the unmodified parent measures 1.468 A against the crystal reference at
+# full sampling, with a 0.563 A median fold-to-fold jitter, so any gate below
+# 1.468 + 0.563 ~= 2.03 A rejects the parent and measures nothing.
+#
+# Measured 2026-08-08 (SLURM job 238335, tools/esmfold2/fold_many.py, num_loops=20
+# num_sampling_steps=100): the 21 gatefix_probe designs' CORE-motif RMSD vs the
+# crystal reference --
+#   min 1.486  q1 2.391  median 2.791  q3 3.149  max 3.521
+#   sorted: 1.49 1.53 1.54 1.93 2.20 2.39 2.49 2.59 2.75 2.78 2.79 2.82 3.00
+#           3.02 3.03 3.15 3.16 3.22 3.24 3.25 3.52
+# Three designs sit essentially at the parent's own value (1.49-1.54), then a
+# gap to 1.93, then an unbroken continuum from 2.20 to 3.52 -- no shoulder
+# ABOVE the floor to put a discriminating threshold at. The only real gap
+# (1.54 -> 1.93 -> 2.20) sits below 2.03 and cannot be used without rejecting
+# the parent. Per the gate-fix plan's decision rule, that puts this on the
+# FLOOR branch: MOTIF_RMSD_MAX = 2.1, one tick above 2.03 for headroom over the
+# parent's own measurement rather than sitting on it exactly.
+# This is NOT the permissive case the rule warned about -- at 2.1, only 4/21
+# (19%) of designs pass, so the gate genuinely discriminates; it is simply
+# anchored at the parent's own noise floor rather than at a shoulder in the
+# design distribution, because no such shoulder exists above the floor.
+MOTIF_RMSD_MAX = 2.1
 PLDDT_MARGIN = 0.05              # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
 # The two folding models do NOT share a pLDDT scale: ESMFold2 reports 0-1,
 # AF3 reports 0-100. PLDDT_MARGIN is expressed on ESMFold2's scale; any AF3
