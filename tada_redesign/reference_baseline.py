@@ -15,19 +15,26 @@ measurement found the core-motif RMSD noise floor was 3.6x worse under
 reduced sampling (2.020 A vs 0.563 A median parent-vs-parent jitter) --
 confidence and structural reproducibility are different quantities, and a
 flat pLDDT hid a real structural problem. The two-tier screen is retired on
-that evidence; MODES now holds exactly one mode.
+that evidence; there is exactly one fold setting now, `constants.ESMFOLD_SETTINGS`.
 
 Honesty ceiling: this is a confidence reference, not a stability reference. The
-energetic baseline is Part 3b's Rosetta stage.
+energetic baseline is Part 3b's Rosetta stage. Motif RMSD (below) measures
+geometry, not activity.
+
+Also scores each parent's own CORE-motif RMSD against `constants.RMSD_REFERENCE`
+(via `score_structure.motif_rmsd`, after `align_numbering`) -- the SAME path
+`score_folds.py` uses for every design, so the campaign's headline parent
+numbers (TadA8e 1.354 A, TadA9 1.357 A) are reproducible from this committed
+module rather than from an unversioned side-script. `--score-only` scores
+whatever `<parent>__fold.cif` already exists in `--run-dir/baseline` without
+invoking `fold_many.py` at all -- no fold, no GPU, no SLURM.
 """
 import argparse
 import json
 import os
 import subprocess
 
-from . import constants, io, provenance
-
-MODES = {"fold": constants.ESMFOLD_SETTINGS}
+from . import constants, io, motif, provenance, score_structure
 
 
 def baseline_id(parent):
@@ -56,33 +63,88 @@ def read_baseline(run_dir, require=None):
     return out
 
 
+def core_motif_residues():
+    """Residue numbers of `motif.CORE_MOTIF`, intersected with MODELED --
+    identical to what `score_folds.py` measures for every design."""
+    return motif.arm_residues(motif.CORE_MOTIF, motif.load_masks())
+
+
+def score_baseline_rmsd(run_dir, parents=None, residues=None):
+    """{parent: CORE-motif heavy-atom RMSD (A) vs `constants.RMSD_REFERENCE`}.
+
+    Scores whatever `<parent>__fold.cif` already exists under
+    `run_dir/baseline` -- never folds, never invokes `fold_many.py`. Uses the
+    exact same `heavy_atoms_from_cif` -> `align_numbering` -> `motif_rmsd`
+    sequence `score_folds.score_one` uses for a design, so a parent's number
+    is measured through the identical code path as everything it gates. A
+    parent with no fold on disk yet is simply absent from the returned dict,
+    not raised on: `read_baseline`'s `require=` is the place that enforces
+    presence when it matters.
+    """
+    residues = core_motif_residues() if residues is None else residues
+    out = {}
+    d = os.path.join(run_dir, "baseline")
+    for parent in (parents or constants.PARENTS):
+        cif = os.path.join(d, f"{baseline_id(parent)}.cif")
+        if not os.path.exists(cif):
+            continue
+        ref_atoms = score_structure.heavy_atoms_from_pdb(constants.RMSD_REFERENCE[parent])
+        pred_atoms = score_structure.heavy_atoms_from_cif(cif)
+        pred_atoms = score_structure.align_numbering(ref_atoms, pred_atoms)
+        out[parent] = score_structure.motif_rmsd(ref_atoms, pred_atoms, residues)
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     sub = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--run-dir", default=os.path.join(sub, "outputs", constants.RUN_DIR_NAME))
+    ap.add_argument("--score-only", action="store_true",
+                     help="Skip folding entirely; score CORE-motif RMSD (and "
+                          "read existing pLDDT) from whatever "
+                          "<parent>__fold.cif already exists under "
+                          "--run-dir/baseline. Never invokes fold_many.py, "
+                          "so no GPU and no SLURM job are used.")
     args = ap.parse_args(argv)
 
     out_dir = os.path.join(args.run_dir, "baseline")
     os.makedirs(out_dir, exist_ok=True)
     jobs = baseline_jobs()
-    settings = MODES["fold"]
 
-    jobs_tsv = os.path.join(out_dir, "jobs_fold.tsv")
-    io.write_tsv(jobs_tsv, [{"design_id": j["design_id"], "sequence": j["sequence"]}
-                            for j in jobs], ("design_id", "sequence"))
-    cmd = ["python", os.path.join(constants.MONOREPO, "tools/esmfold2/fold_many.py"),
-           "--jobs", jobs_tsv, "--out-dir", out_dir,
-           "--ligand-ccd", constants.ZN_RESNAME,
-           "--num-loops", str(settings["num_loops"]),
-           "--num-sampling-steps", str(settings["num_sampling_steps"]),
-           "--skip-existing"]
-    print(f"[reference_baseline] fold: {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, check=False)
+    if not args.score_only:
+        settings = constants.ESMFOLD_SETTINGS
+        jobs_tsv = os.path.join(out_dir, "jobs_fold.tsv")
+        io.write_tsv(jobs_tsv, [{"design_id": j["design_id"], "sequence": j["sequence"]}
+                                for j in jobs], ("design_id", "sequence"))
+        cmd = ["python", os.path.join(constants.MONOREPO, "tools/esmfold2/fold_many.py"),
+               "--jobs", jobs_tsv, "--out-dir", out_dir,
+               "--ligand-ccd", constants.ZN_RESNAME,
+               "--num-loops", str(settings["num_loops"]),
+               "--num-sampling-steps", str(settings["num_sampling_steps"]),
+               "--skip-existing"]
+        print(f"[reference_baseline] fold: {' '.join(cmd)}", flush=True)
+        subprocess.run(cmd, check=False)
 
     got = read_baseline(args.run_dir)
-    for parent, plddt in sorted(got.items()):
-        print(f"[reference_baseline] {parent}: pLDDT {plddt:.4f}")
-    provenance.write(out_dir, "reference_baseline", len(jobs), len(got), extra=got)
+    rmsd = score_baseline_rmsd(args.run_dir)
+    for parent in constants.PARENTS:
+        plddt_s = f"{got[parent]:.4f}" if parent in got else "MISSING"
+        rmsd_s = f"{rmsd[parent]:.4f} A" if parent in rmsd else "MISSING"
+        print(f"[reference_baseline] {parent}: pLDDT {plddt_s}  CORE motif RMSD {rmsd_s}")
+
+    io.write_tsv(
+        os.path.join(out_dir, "baseline_summary.tsv"),
+        [{"parent": p,
+          "plddt": round(got[p], 4) if p in got else io.MISSING,
+          "core_motif_rmsd": round(rmsd[p], 4) if p in rmsd else io.MISSING}
+         for p in constants.PARENTS],
+        ("parent", "plddt", "core_motif_rmsd"),
+        header_comment="CORE motif RMSD is geometry (Kabsch-superposed heavy-atom "
+                        "RMSD vs constants.RMSD_REFERENCE), not stability or activity.")
+
+    extra = dict(got)
+    extra["core_motif_rmsd"] = rmsd
+    provenance.write(out_dir, "reference_baseline", len(jobs), len(got), extra=extra)
     return 0
 
 
