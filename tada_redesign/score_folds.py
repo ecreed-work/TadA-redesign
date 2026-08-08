@@ -18,6 +18,13 @@ Three deliberate choices:
     test silently admits broken measurements -- the exact shape of the defect
     that turned every Zn distance into nan in Part 2.
 
+CAVEAT ON THE PASS RATE THIS MODULE PRINTS/RECORDS (2026-08-08 ruling): with
+the entire 21-probe CORE distribution sitting inside the parent's own
+fold-to-fold jitter band (see constants.MOTIF_RMSD_MAX), `MOTIF_RMSD_MAX` is a
+GROSS-FAILURE catch, not a ranking metric. A pass rate near 100% is therefore
+an expected consequence of that re-role, not evidence the designs are good --
+it reads a design's core as "not obviously collapsed," nothing stronger.
+
 Honesty ceiling: pLDDT is model confidence and motif RMSD is geometry. Neither is
 stability, solubility, or activity.
 """
@@ -120,7 +127,9 @@ def main(argv=None):
             "status": status, "passed": str(bool(passed)),
         }, COLUMNS)
 
-    print(f"[score_folds] {n_pass}/{len(designs)} passed -> {out_path}")
+    print(f"[score_folds] {n_pass}/{len(designs)} passed -> {out_path} "
+          f"(MOTIF_RMSD_MAX is a gross-failure catch, not a ranking metric -- "
+          f"a near-100% pass rate is expected, not a quality result)")
     # Every design produced a row (score_one never raises), so the degraded gate
     # compares rows WRITTEN to inputs and cannot trip here. A low PASS rate is a
     # measurement, not a stage failure -- the correction an earlier review

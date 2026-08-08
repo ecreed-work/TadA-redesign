@@ -1,7 +1,9 @@
 """Shared geometric scorer for both folding stages.
 
-One implementation of superposition and RMSD, called by the ESMFold2 screen,
-the full-sampling re-fold, and the AF3 stage. Two independent forward passes of
+One implementation of superposition and RMSD, called by the single
+full-sampling ESMFold2 fold (`score_folds.py`; the earlier two-tier
+screen/re-fold split is retired, see `constants.ESMFOLD_SETTINGS`) and the
+AF3 stage. Two independent forward passes of
 any structure predictor share no global frame, so EVERY comparison here
 superposes before measuring. The predecessor campaign shipped a `pocket_rmsd`
 that summed raw coordinate differences with no superposition at all; at a 1.0-A
