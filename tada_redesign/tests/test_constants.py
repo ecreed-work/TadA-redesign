@@ -145,3 +145,20 @@ def test_motif_threshold_exceeds_the_parents_own_offset_and_jitter():
     floor could discriminate among them."""
     floor = max(1.354, 1.357) + 0.563
     assert constants.MOTIF_RMSD_MAX > floor
+    # Floor-bound alone lets MOTIF_RMSD_MAX drift arbitrarily high (e.g. 50.0)
+    # while still passing -- and the unbounded direction is exactly the
+    # flattering one for a gate whose job is to REJECT gross failures. Pin the
+    # measured, derived value exactly; if it ever needs to change, this test
+    # must be edited deliberately, not silently satisfied by a loose bound.
+    assert constants.MOTIF_RMSD_MAX == 2.0
+
+
+def test_anchor_constants_are_pinned_to_their_measured_values():
+    """Floor/relationship tests alone do not stop these three from drifting to
+    a value that reproduces the original 3.5 A anchor defect (constants.py
+    itself records ANCHOR_OUTLIER_CUTOFF=50.0 -- i.e. no filtering at all --
+    as reproducing exactly that) while the rest of the suite stays green. Pin
+    all three exactly, mirroring the MOTIF_RMSD_MAX pin above."""
+    assert constants.ANCHOR_OUTLIER_CUTOFF == 5.0
+    assert constants.ANCHOR_MAX_ITER == 10
+    assert constants.ANCHOR_MIN_RETAINED_FRAC == 0.60
