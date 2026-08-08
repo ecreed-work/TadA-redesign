@@ -77,3 +77,42 @@ def test_arm_residues_are_all_modeled(masks):
     modeled = set(masks["MODELED"])
     for arm in constants.ARMS:
         assert set(motif.arm_residues(arm, masks)) <= modeled
+
+
+CORE_EXPECTED = (28, 30, 46, 54, 57, 58, 59, 84, 85, 86, 87, 88, 90,
+                 108, 110, 111, 149)
+
+
+def test_core_is_the_catalytic_machinery_and_substrate_pocket(masks):
+    """CATALYTIC | POCKET, intersected with MODELED. Measured 2026-08-06."""
+    assert motif.arm_residues(motif.CORE_MOTIF, masks) == CORE_EXPECTED
+    assert len(CORE_EXPECTED) == 17
+
+
+def test_core_excludes_the_terminal_dna_face_residues(masks):
+    """Residue 156's ring atoms deviated 19-23 A between a predicted structure
+    and the relaxed reference -- free-flapping near the chain end, swamping the
+    average. Dropping the DNA-face-only positions took the parent's own score
+    from 7.673 A to 1.414 A."""
+    core = set(motif.arm_residues(motif.CORE_MOTIF, masks))
+    full = set(motif.arm_residues(motif.ARM_FULL, masks))
+    assert sorted(full - core) == [109, 148, 152, 153, 154, 156, 157]
+    assert 156 not in core
+
+
+def test_core_stays_clear_of_the_chain_terminus(masks):
+    """The measured artifact was terminal flapping, so the guard is on where the
+    core sits, not merely on which mask it came from."""
+    core = motif.arm_residues(motif.CORE_MOTIF, masks)
+    assert max(core) <= max(masks["MODELED"]) - 10
+    assert min(core) >= min(masks["MODELED"]) + 10
+
+
+def test_core_contains_the_catalytic_tetrad(masks):
+    core = set(motif.arm_residues(motif.CORE_MOTIF, masks))
+    assert {57, 59, 87, 90} <= core
+
+
+def test_core_is_a_subset_of_the_full_arm(masks):
+    assert set(motif.arm_residues(motif.CORE_MOTIF, masks)) <= set(
+        motif.arm_residues(motif.ARM_FULL, masks))

@@ -16,6 +16,10 @@ FULL arm is CATALYTIC | POCKET | DNA_FACE intersected with MODELED (24).
 Honesty ceiling: freezing a residue set constrains geometry and identity. It
 does not make the resulting protein catalytically active, and nothing in this
 module measures function.
+
+NOTE: ARM_FULL and ARM_MIN describe what gets FROZEN during design; CORE_MOTIF
+describes what gets MEASURED when scoring a predicted structure. These are
+different jobs and must not be conflated.
 """
 import json
 
@@ -23,6 +27,15 @@ from . import constants
 
 ARM_FULL = "FULL"
 ARM_MIN = "MIN"
+
+# The MEASURED subset, used for scoring rather than for freezing. The FULL arm's
+# DNA-face residues sit near the chain terminus, where a predicted structure and
+# a relaxed crystal-derived one diverge freely: residue 156's ring atoms alone
+# deviated 19-23 A, dominating a 202-atom average and pushing the UNMODIFIED
+# parent to 7.673 A against a 1.5 A gate. Restricted to the catalytic machinery
+# and the substrate pocket, the same parent measures 1.414 A. Measured
+# 2026-08-06; see docs/plans/2026-08-06-tada-redesign-part3a-gatefix.md.
+CORE_MOTIF = "CORE"
 
 # Every motif residue is fixed with the ALL keyword (backbone + sidechain),
 # never TIP. Freeing the Zn donors' backbone is MEASURED to let the metal
@@ -34,6 +47,7 @@ FIXED_ATOM_KEYWORD = "ALL"
 _ARM_MASKS = {
     ARM_FULL: ("CATALYTIC", "POCKET", "DNA_FACE"),
     ARM_MIN: ("CATALYTIC",),
+    CORE_MOTIF: ("CATALYTIC", "POCKET"),
 }
 
 
