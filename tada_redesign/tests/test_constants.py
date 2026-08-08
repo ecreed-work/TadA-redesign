@@ -129,14 +129,19 @@ def test_shard_count_reflects_load_dominated_cost():
 
 
 def test_motif_threshold_exceeds_the_parents_own_offset_and_jitter():
-    """The gate must admit the unmodified parent, which measures 1.468 A against
-    the crystal reference at full sampling with a 0.563 A median fold-to-fold
-    jitter. A threshold below that floor (1.468 + 0.563 ~= 2.03 A) rejects the
-    parent and is meaningless. MOTIF_RMSD_MAX = 2.1 sits on the floor branch of
-    the decision rule: the 21-design gatefix_probe distribution (job 238335) has
-    no shoulder above the floor, only a continuum from 2.20 to 3.52 A, so the
-    threshold is anchored just above the parent's own noise floor rather than at
-    a shoulder in the design scatter."""
-    floor = 1.468 + 0.563
-    assert constants.MOTIF_RMSD_MAX > 1.468
+    """SUPERSEDED 2026-08-08 (Task 3b): the 1.468 A figure this test used to cite
+    came from a side-script that folded with a non-default `--seed`, not from
+    `reference_baseline.py`'s production path -- it was never reproducible
+    through the code the campaign actually runs. Re-measured through the
+    fixed, iteratively-refined anchor (`constants.ANCHOR_OUTLIER_CUTOFF`) via
+    the actual production path (baseline job 238437): parent vs crystal, CORE
+    = TadA8e 1.354 A, TadA9 1.357 A. Floor = max(1.354, 1.357) + 0.563 (given
+    fold-to-fold jitter, not re-derived here) = 1.920 A. A threshold below that
+    floor rejects the unmodified parent and is meaningless.
+    MOTIF_RMSD_MAX = 2.0 sits one tick above the floor -- per the repo owner's
+    2026-08-08 ruling this gate is now a gross-failure catch, not a ranking
+    metric: the entire 21-probe distribution (min 1.296, max 1.713) sits
+    inside the parent's own fold-to-fold jitter band, so no cutoff above the
+    floor could discriminate among them."""
+    floor = max(1.354, 1.357) + 0.563
     assert constants.MOTIF_RMSD_MAX > floor

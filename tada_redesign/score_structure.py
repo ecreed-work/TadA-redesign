@@ -12,6 +12,18 @@ Heavy-atom rather than CA-only RMSD is tractable here precisely because motif
 identity is LOCKED by `motif.py`, so atom names match one-to-one between
 reference and design.
 
+Superposition anchor: `_anchor_arrays` starts from every shared CA, then
+iteratively drops points that deviate beyond `constants.ANCHOR_OUTLIER_CUTOFF`
+after each refit (see `_iterative_anchor_indices`), capped at
+`constants.ANCHOR_MAX_ITER`. A disordered region can be correctly excluded
+from what gets MEASURED and still corrupt the fit if left in the anchor --
+TadA's C-terminal tail deviates 9-36 A from the crystal and, in an
+unfiltered all-CA anchor, dragged the unmodified parent's own core-motif
+RMSD from ~1.35 A to 3.5 A (docs/plans/2026-08-06-tada-redesign-part3a-
+gatefix.md, "Correction, 2026-08-08"). A self-fitting guard
+(`ANCHOR_MIN_RETAINED_FRAC`) stops refinement from collapsing the anchor
+down toward the measured set itself.
+
 Honesty ceiling: an intact motif geometry in a predicted model is not evidence
 of catalytic activity. Nothing in this module measures function.
 """
@@ -166,13 +178,72 @@ def ca_map(atoms):
     return {resnum: xyz for (resnum, name), xyz in atoms.items() if name == "CA"}
 
 
+def _iterative_anchor_indices(P, Q, cutoff=None, max_iter=None):
+    """Indices into `P`/`Q` surviving iterative outlier rejection.
+
+    Scheme (repo owner, 2026-08-08): Kabsch-fit on the currently included set,
+    compute each included point's post-fit deviation, drop everything beyond
+    `cutoff`, and refit -- repeat until the included set stops changing, capped
+    at `max_iter`. This exists because a disordered region left IN the
+    superposition anchor (even when correctly excluded from what gets
+    measured) can drag the least-squares fit far enough to corrupt a
+    perfectly intact measured region: TadA's C-terminal tail deviates 9-36 A
+    from the crystal and, included in an all-CA anchor, pushed the unmodified
+    parent's own CORE-motif RMSD from ~1.35 A to 3.5 A.
+
+    Deterministic: no randomness anywhere in the loop, so identical inputs
+    give the identical sequence of fits and the identical retained index set.
+    """
+    cutoff = constants.ANCHOR_OUTLIER_CUTOFF if cutoff is None else cutoff
+    max_iter = constants.ANCHOR_MAX_ITER if max_iter is None else max_iter
+    idx = np.arange(len(P))
+    for _ in range(max_iter):
+        R, P_mean, Q_mean = kabsch(P[idx], Q[idx])
+        Q_fit = apply_transform(Q[idx], R, P_mean, Q_mean)
+        deviation = np.linalg.norm(P[idx] - Q_fit, axis=1)
+        keep = deviation <= cutoff
+        if keep.all():
+            break
+        new_idx = idx[keep]
+        if len(new_idx) == len(idx):
+            break
+        # Adopt the smaller set even if it now falls below 3 points (Kabsch's
+        # own floor): silently keeping the STALE, larger `idx` here would mask
+        # exactly the failure `_anchor_arrays`' self-fitting guard exists to
+        # catch, by reporting "nothing was dropped" when actually everything
+        # was. Falling below 3 points always ALSO fails the (much higher,
+        # 60%-of-shared-CA) retained-fraction guard downstream, so this still
+        # surfaces as a raised ValueError rather than a silently bad fit.
+        idx = new_idx
+        if len(idx) < 3:
+            break
+    return idx
+
+
 def _anchor_arrays(ref_atoms, pred_atoms, anchor_residues):
     """Paired CA coordinate arrays for the superposition anchor.
 
-    Default anchor is EVERY CA shared by the two structures -- the full
-    modelled backbone, deliberately NOT the (much smaller) set being measured.
-    Fitting on the measured points would trivially shrink the very quantity
-    being reported.
+    Default anchor starts as EVERY CA shared by the two structures -- the full
+    modelled backbone, deliberately NOT the (much smaller) set being measured;
+    fitting on the measured points would trivially shrink the very quantity
+    being reported. That full-backbone set is then iteratively refined
+    (`_iterative_anchor_indices`) to drop points whose post-fit deviation
+    exceeds `constants.ANCHOR_OUTLIER_CUTOFF` -- e.g. a disordered terminus
+    that is free to swing tens of Angstroms and would otherwise dominate the
+    least-squares fit despite being correctly excluded from what gets
+    measured (docs/plans/2026-08-06-tada-redesign-part3a-gatefix.md,
+    "Correction, 2026-08-08").
+
+    An explicit `anchor_residues=` override is used EXACTLY as given, with no
+    refinement: it is already a deliberate, named choice (e.g. a diagnostic
+    fixed span), not the default "every shared CA" starting point the
+    refinement exists to clean up.
+
+    Self-fitting guard: refinement must not collapse the anchor down toward
+    (or past) the measured set, which would shrink the reported RMSD by
+    construction. If fewer than `constants.ANCHOR_MIN_RETAINED_FRAC` of the
+    shared CAs survive, this raises rather than silently returning a
+    self-fitted anchor.
     """
     ref_ca, pred_ca = ca_map(ref_atoms), ca_map(pred_atoms)
     shared = sorted(set(ref_ca) & set(pred_ca))
@@ -183,7 +254,19 @@ def _anchor_arrays(ref_atoms, pred_atoms, anchor_residues):
             f"superposition anchor has {len(shared)} shared CA; need >= 3")
     P = np.array([ref_ca[r] for r in shared])
     Q = np.array([pred_ca[r] for r in shared])
-    return P, Q
+    if anchor_residues is not None:
+        return P, Q
+
+    idx = _iterative_anchor_indices(P, Q)
+    min_retained = constants.ANCHOR_MIN_RETAINED_FRAC * len(shared)
+    if len(idx) < min_retained:
+        raise ValueError(
+            f"iterative anchor refinement retained {len(idx)}/{len(shared)} "
+            f"shared CA ({len(idx) / len(shared):.1%}), below "
+            f"ANCHOR_MIN_RETAINED_FRAC={constants.ANCHOR_MIN_RETAINED_FRAC:.0%}"
+            " -- the anchor may be collapsing onto (or near) the measured "
+            "set rather than staying a genuine, independent reference frame")
+    return P[idx], Q[idx]
 
 
 def motif_rmsd(ref_atoms, pred_atoms, residues, anchor_residues=None):

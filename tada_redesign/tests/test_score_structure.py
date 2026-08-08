@@ -73,6 +73,62 @@ def test_motif_rmsd_raises_below_three_anchor_points():
         ss.motif_rmsd(ref, pred, residues=(1,), anchor_residues=(1, 2))
 
 
+def test_anchor_refinement_excludes_a_flapping_tail_from_the_fit():
+    """The defect this task fixes: a disordered region correctly excluded from
+    what gets MEASURED still corrupted the fit when left in the default
+    ANCHOR (all shared CA). A tail deviating far beyond
+    `ANCHOR_OUTLIER_CUTOFF` must be dropped by refinement so it cannot drag
+    the reported RMSD for an otherwise perfectly-superposed core -- exactly
+    the failure measured on the real parents (3.55/3.52 A with the tail in
+    the anchor, 1.35/1.36 A once it is excluded)."""
+    ref = _synthetic_atoms(n_res=40)
+    R, shift = _rotation(25.0), np.array([-6.0, 9.0, 4.0])
+    pred = _transformed(ref, R, shift)
+    # A "tail" of 2/40 (5%, close to the real 7/156 ratio) residues swinging
+    # 30 A from the rigid transform, well beyond ANCHOR_OUTLIER_CUTOFF; the
+    # other 38 residues are an exact rigid-body match with zero noise, so a
+    # correctly-refined anchor recovers the transform exactly.
+    for i in range(39, 41):
+        pred[(i, "CA")] = pred[(i, "CA")] + R @ np.array([30.0, 0.0, 0.0])
+    core_rmsd = ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
+    assert core_rmsd == pytest.approx(0.0, abs=1e-6)
+
+
+def test_anchor_refinement_raises_when_too_many_points_are_outliers():
+    """Self-fitting guard: if refinement would drop the retained anchor below
+    `ANCHOR_MIN_RETAINED_FRAC` of the shared CAs, it must raise rather than
+    silently return a small, self-fitted anchor -- which would shrink the
+    reported RMSD by construction."""
+    ref = _synthetic_atoms(n_res=40)
+    R, shift = _rotation(30.0), np.array([5.0, 5.0, 3.0])
+    pred = _transformed(ref, R, shift)
+    # 17/40 (42.5%) residues pushed 30 A off the rigid transform: close enough
+    # to half the anchor that no rotation can simultaneously satisfy both the
+    # "good" and "displaced" halves, so iterative refinement cannot converge
+    # on a majority set and collapses toward nothing retained -- far below
+    # the 60% floor.
+    for i in range(24, 41):
+        pred[(i, "CA")] = pred[(i, "CA")] + R @ np.array([30.0, 0.0, 0.0])
+    with pytest.raises(ValueError):
+        ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
+
+
+def test_anchor_refinement_is_deterministic():
+    """Same inputs must give the same retained anchor and the same RMSD, every
+    run -- no randomness anywhere in the iterative refinement loop."""
+    ref = _synthetic_atoms(n_res=20)
+    pred = _transformed(ref, _rotation(40.0), np.array([2.0, -3.0, 1.0]))
+    for i in (15, 16, 17):
+        pred[(i, "CA")] = pred[(i, "CA")] + np.array([8.0, 0.0, 0.0])
+    r1 = ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
+    r2 = ss.motif_rmsd(ref, pred, residues=(1, 2, 3))
+    assert r1 == r2
+    P1, Q1 = ss._anchor_arrays(ref, pred, None)
+    P2, Q2 = ss._anchor_arrays(ref, pred, None)
+    assert np.array_equal(P1, P2)
+    assert np.array_equal(Q1, Q2)
+
+
 def test_cleft_clearance_is_large_when_the_pocket_is_open():
     ref = _synthetic_atoms()
     pred = _transformed(ref, _rotation(20.0), np.array([4.0, 4.0, 4.0]))

@@ -81,29 +81,78 @@ CA_BREAK_MAX = 4.2               # A between consecutive CA
 LENGTH_RANGE = (150, 175)        # residues
 ZN_DONOR_RANGE = (2.0, 2.6)      # A, Zn to each of its three donors
 
-# Gate thresholds. MOTIF_RMSD_MAX is DERIVED from measured scatter, not assumed.
-# Floor: the unmodified parent measures 1.468 A against the crystal reference at
-# full sampling, with a 0.563 A median fold-to-fold jitter, so any gate below
-# 1.468 + 0.563 ~= 2.03 A rejects the parent and measures nothing.
+# --------------------------------------------------- superposition anchor
+# `score_structure._anchor_arrays`'s default anchor is EVERY shared CA,
+# iteratively refined by dropping outliers and refitting -- see the module
+# docstring for the mechanism. Both constants below are DERIVED, not assumed
+# (measured 2026-08-08, baseline job 238437 + gatefix_probe job 238335):
 #
-# Measured 2026-08-08 (SLURM job 238335, tools/esmfold2/fold_many.py, num_loops=20
-# num_sampling_steps=100): the 21 gatefix_probe designs' CORE-motif RMSD vs the
-# crystal reference --
-#   min 1.486  q1 2.391  median 2.791  q3 3.149  max 3.521
-#   sorted: 1.49 1.53 1.54 1.93 2.20 2.39 2.49 2.59 2.75 2.78 2.79 2.82 3.00
-#           3.02 3.03 3.15 3.16 3.22 3.24 3.25 3.52
-# Three designs sit essentially at the parent's own value (1.49-1.54), then a
-# gap to 1.93, then an unbroken continuum from 2.20 to 3.52 -- no shoulder
-# ABOVE the floor to put a discriminating threshold at. The only real gap
-# (1.54 -> 1.93 -> 2.20) sits below 2.03 and cannot be used without rejecting
-# the parent. Per the gate-fix plan's decision rule, that puts this on the
-# FLOOR branch: MOTIF_RMSD_MAX = 2.1, one tick above 2.03 for headroom over the
-# parent's own measurement rather than sitting on it exactly.
-# This is NOT the permissive case the rule warned about -- at 2.1, only 4/21
-# (19%) of designs pass, so the gate genuinely discriminates; it is simply
-# anchored at the parent's own noise floor rather than at a shoulder in the
-# design distribution, because no such shoulder exists above the floor.
-MOTIF_RMSD_MAX = 2.1
+#   cutoff (A)  parent retained-frac (TadA8e/TadA9)   CORE RMSD (TadA8e/TadA9)
+#     1.00        10.9% / 10.9%  (FAILS the 60% guard)   1.460 / 1.545
+#     2.50        53.2% / 51.3%  (FAILS the 60% guard)   1.386 / 1.379
+#     3.00        68.0% / 66.7%  (guard passes, thin margin: worst of the
+#                                 21 probes retains only 60.9%)             1.408 / 1.386
+#     5.00        91.7% / 92.3%  (guard passes with wide margin: probe worst
+#                                 is 89.1%)                                 1.354 / 1.357
+#     8.00        93.6% / 92.9%  (still comfortably inside the guard)       1.377 / 1.355
+#    15.00        94.9% / 94.9%  (the disordered tail starts re-entering:
+#                                 CORE RMSD begins climbing)                1.450 / 1.440
+#    20.00        96.2% / 96.2%  (climbing fast)                            1.729 / 1.703
+#    50.00       100.0% / 100.0% (= the unmodified, unfixed all-CA anchor)  3.555 / 3.523
+#
+# 5.0 A is chosen: it sits in the flat, low-RMSD plateau (1.35-1.38 A, matching
+# the independently-anchored 1.349/1.359 A to within 0.01 A) with a wide safety
+# margin over the self-fitting guard on every one of the 21 probes (worst case
+# 89.1% retained vs the 60% floor) and stays well clear of the tail-driven
+# breakdown that starts around 15-20 A and reproduces the original 3.5 A
+# defect by cutoff=50 (no filtering at all). A tighter cutoff (<=3.0) removes
+# so much of the shared CA set that a single unlucky design would trip the
+# self-fitting guard on legitimate geometry, not a genuine collapse.
+ANCHOR_OUTLIER_CUTOFF = 5.0
+
+# Repeat "fit -> drop residues past the cutoff -> refit" until the included
+# set stops changing. Every measured cutoff above converges in well under 10
+# iterations; this is a safety cap against a pathological input oscillating
+# forever, not a value tuned against these structures.
+ANCHOR_MAX_ITER = 10
+
+# Self-fitting guard: the iteratively-refined anchor must not collapse onto
+# (or near) the measured set, which would shrink the reported RMSD by
+# construction. If refinement drops the retained fraction below this floor,
+# `_anchor_arrays` raises instead of silently returning a self-fitted anchor.
+# 0.60 leaves a wide margin under ANCHOR_OUTLIER_CUTOFF=5.0's measured worst
+# case (89.1% retained across the 21 probes; both parents 91.7%/92.3%).
+ANCHOR_MIN_RETAINED_FRAC = 0.60
+
+# Gate thresholds. MOTIF_RMSD_MAX is DERIVED from measured scatter, not assumed,
+# and is a GROSS-FAILURE catch, not a ranking metric (repo owner's ruling,
+# 2026-08-08): see the note below.
+#
+# SUPERSEDED history, kept visible rather than deleted: the 2.1 A value below
+# was derived in Task 3 from the all-CA anchor, before Task 3b discovered that
+# anchor was itself corrupted by the same disordered C-terminal tail Task 1
+# had already excluded from the MEASURED set (docs/plans/2026-08-06-tada-
+# redesign-part3a-gatefix.md, "Correction, 2026-08-08"). Under that anchor the
+# unmodified parent measured 3.555/3.523 A -- failing its own 2.1 A gate --
+# so the old value was derived from a corrupted distribution and carries no
+# meaning; it was never shipped as a passing gate (Task 4 reported BLOCKED).
+#
+# Re-derived 2026-08-08 under the fixed, iteratively-refined anchor
+# (ANCHOR_OUTLIER_CUTOFF=5.0), through the actual production code path
+# (baseline job 238437, gatefix_probe job 238335):
+#   parent vs crystal, CORE:            TadA8e 1.354 A, TadA9 1.357 A
+#   fold-to-fold jitter (given, not re-derived here): 0.563 A median
+#   floor = max(1.354, 1.357) + 0.563 = 1.920 A
+#   MOTIF_RMSD_MAX = 2.0 A -- one tick above the floor for headroom over the
+#   parent's own measurement, mirroring the prior derivation's margin.
+# 21-probe CORE distribution under the fixed anchor: min 1.296  median 1.517
+# max 1.713 -- the ENTIRE distribution sits inside the parent's own
+# fold-to-fold jitter band, so 21/21 pass at 2.0 A. This is the honest
+# measurement, not a tuned threshold: with every design already within noise
+# of the parent, no cutoff above the floor could discriminate among them.
+# ESMFold2 cannot resolve design-vs-parent differences at the CORE site;
+# real discrimination is deferred to the stability stage.
+MOTIF_RMSD_MAX = 2.0
 PLDDT_MARGIN = 0.05              # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
 # The two folding models do NOT share a pLDDT scale: ESMFold2 reports 0-1,
 # AF3 reports 0-100. PLDDT_MARGIN is expressed on ESMFold2's scale; any AF3
