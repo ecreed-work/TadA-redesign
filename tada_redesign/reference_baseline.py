@@ -24,10 +24,18 @@ geometry, not activity.
 Also scores each parent's own CORE-motif RMSD against `constants.RMSD_REFERENCE`
 (via `score_structure.motif_rmsd`, after `align_numbering`) -- the SAME path
 `score_folds.py` uses for every design, so the campaign's headline parent
-numbers (TadA8e 1.354 A, TadA9 1.357 A) are reproducible from this committed
-module rather than from an unversioned side-script. `--score-only` scores
-whatever `<parent>__fold.cif` already exists in `--run-dir/baseline` without
-invoking `fold_many.py` at all -- no fold, no GPU, no SLURM.
+numbers (TadA8e 1.354 A, TadA9 1.357 A, all heavy atoms) are reproducible from
+this committed module rather than from an unversioned side-script.
+`--score-only` scores whatever `<parent>__fold.cif` already exists in
+`--run-dir/baseline` without invoking `fold_many.py` at all -- no fold, no
+GPU, no SLURM.
+
+Reports BOTH the all-heavy-atom RMSD and the backbone-only (N/CA/C/O,
+`constants.BACKBONE_ATOMS`) RMSD, side by side (TadA8e 0.7348 A / TadA9
+0.6464 A backbone-only, measured 2026-08-09). The backbone-only figure is
+identity-independent, so it is comparable across the FULL and MIN design arms
+-- see docs/plans/2026-08-09-backbone-core-metric.md, which also derives
+`constants.MOTIF_RMSD_MAX` from this same number.
 """
 import argparse
 import json
@@ -69,8 +77,8 @@ def core_motif_residues():
     return motif.arm_residues(motif.CORE_MOTIF, motif.load_masks())
 
 
-def score_baseline_rmsd(run_dir, parents=None, residues=None):
-    """{parent: CORE-motif heavy-atom RMSD (A) vs `constants.RMSD_REFERENCE`}.
+def score_baseline_rmsd(run_dir, parents=None, residues=None, atom_names=None):
+    """{parent: CORE-motif RMSD (A) vs `constants.RMSD_REFERENCE`}.
 
     Scores whatever `<parent>__fold.cif` already exists under
     `run_dir/baseline` -- never folds, never invokes `fold_many.py`. Uses the
@@ -80,6 +88,11 @@ def score_baseline_rmsd(run_dir, parents=None, residues=None):
     parent with no fold on disk yet is simply absent from the returned dict,
     not raised on: `read_baseline`'s `require=` is the place that enforces
     presence when it matters.
+
+    `atom_names` is forwarded to `score_structure.motif_rmsd` unchanged;
+    default `None` measures every heavy atom, matching every existing caller.
+    Pass `constants.BACKBONE_ATOMS` for the identity-independent measurement
+    (see `main`, which reports both side by side).
     """
     residues = core_motif_residues() if residues is None else residues
     out = {}
@@ -91,7 +104,8 @@ def score_baseline_rmsd(run_dir, parents=None, residues=None):
         ref_atoms = score_structure.heavy_atoms_from_pdb(constants.RMSD_REFERENCE[parent])
         pred_atoms = score_structure.heavy_atoms_from_cif(cif)
         pred_atoms = score_structure.align_numbering(ref_atoms, pred_atoms)
-        out[parent] = score_structure.motif_rmsd(ref_atoms, pred_atoms, residues)
+        out[parent] = score_structure.motif_rmsd(ref_atoms, pred_atoms, residues,
+                                                  atom_names=atom_names)
     return out
 
 
@@ -127,23 +141,33 @@ def main(argv=None):
 
     got = read_baseline(args.run_dir)
     rmsd = score_baseline_rmsd(args.run_dir)
+    rmsd_bb = score_baseline_rmsd(args.run_dir, atom_names=constants.BACKBONE_ATOMS)
     for parent in constants.PARENTS:
         plddt_s = f"{got[parent]:.4f}" if parent in got else "MISSING"
         rmsd_s = f"{rmsd[parent]:.4f} A" if parent in rmsd else "MISSING"
-        print(f"[reference_baseline] {parent}: pLDDT {plddt_s}  CORE motif RMSD {rmsd_s}")
+        rmsd_bb_s = f"{rmsd_bb[parent]:.4f} A" if parent in rmsd_bb else "MISSING"
+        print(f"[reference_baseline] {parent}: pLDDT {plddt_s}  "
+              f"CORE motif RMSD (all heavy atoms) {rmsd_s}  "
+              f"CORE motif RMSD (backbone only) {rmsd_bb_s}")
 
     io.write_tsv(
         os.path.join(out_dir, "baseline_summary.tsv"),
         [{"parent": p,
           "plddt": round(got[p], 4) if p in got else io.MISSING,
-          "core_motif_rmsd": round(rmsd[p], 4) if p in rmsd else io.MISSING}
+          "core_motif_rmsd": round(rmsd[p], 4) if p in rmsd else io.MISSING,
+          "core_motif_rmsd_backbone": round(rmsd_bb[p], 4) if p in rmsd_bb else io.MISSING}
          for p in constants.PARENTS],
-        ("parent", "plddt", "core_motif_rmsd"),
-        header_comment="CORE motif RMSD is geometry (Kabsch-superposed heavy-atom "
-                        "RMSD vs constants.RMSD_REFERENCE), not stability or activity.")
+        ("parent", "plddt", "core_motif_rmsd", "core_motif_rmsd_backbone"),
+        header_comment="CORE motif RMSD is geometry (Kabsch-superposed RMSD vs "
+                        "constants.RMSD_REFERENCE), not stability or activity. "
+                        "core_motif_rmsd is all heavy atoms (identity-dependent); "
+                        "core_motif_rmsd_backbone is N/CA/C/O only "
+                        "(constants.BACKBONE_ATOMS, identity-independent -- see "
+                        "docs/plans/2026-08-09-backbone-core-metric.md).")
 
     extra = dict(got)
     extra["core_motif_rmsd"] = rmsd
+    extra["core_motif_rmsd_backbone"] = rmsd_bb
     provenance.write(out_dir, "reference_baseline", len(jobs), len(got), extra=extra)
     return 0
 

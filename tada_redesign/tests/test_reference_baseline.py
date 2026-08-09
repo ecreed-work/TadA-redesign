@@ -119,6 +119,47 @@ def _write_pred_cif(path, resnums, resnum_offset=0, shift=(0.0, 0.0, 0.0),
     path.write_text(header + "".join(rows))
 
 
+def _write_pred_cif_ca_only(path, resnums, resnum_offset=0, shift=(0.0, 0.0, 0.0),
+                            chain="F"):
+    """A minimal `_atom_site` loop with ONLY a CA per residue -- simulates a
+    design whose sidechain identity changed entirely (no shared sidechain
+    atom name), the exact MIN-arm defect `constants.BACKBONE_ATOMS` exists to
+    route around."""
+    header = (
+        "data_test\nloop_\n_atom_site.group_PDB\n_atom_site.type_symbol\n"
+        "_atom_site.label_atom_id\n_atom_site.label_comp_id\n_atom_site.auth_asym_id\n"
+        "_atom_site.auth_seq_id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n_atom_site.Cartn_z\n")
+    rows = []
+    for resnum in resnums:
+        pred_resnum = resnum - resnum_offset
+        x, y, z = (float(resnum) + shift[0], 0.0 + shift[1], 0.0 + shift[2])
+        rows.append(f"ATOM C CA ALA {chain} {pred_resnum} {x:.3f} {y:.3f} {z:.3f}\n")
+    path.write_text(header + "".join(rows))
+
+
+def test_score_baseline_rmsd_atom_names_scores_despite_a_missing_sidechain(tmp_path, monkeypatch):
+    """The MIN-arm defect this constant exists to fix: a prediction missing
+    the reference's sidechain atoms raises KeyError under the default
+    all-heavy-atom measurement, but scores under
+    `atom_names=constants.BACKBONE_ATOMS` since only CA (a backbone atom) is
+    shared."""
+    ref_pdb = tmp_path / "ref.pdb"
+    _write_ref_pdb(ref_pdb, resnums=[57, 58, 59])
+    baseline_dir = tmp_path / "baseline"
+    baseline_dir.mkdir()
+    cif = baseline_dir / f"{rb.baseline_id('TadA8e')}.cif"
+    _write_pred_cif_ca_only(cif, resnums=[57, 58, 59], resnum_offset=56)
+    monkeypatch.setitem(constants.RMSD_REFERENCE, "TadA8e", str(ref_pdb))
+
+    with pytest.raises(KeyError):
+        rb.score_baseline_rmsd(str(tmp_path), parents=["TadA8e"], residues=(57, 58, 59))
+
+    rmsd = rb.score_baseline_rmsd(str(tmp_path), parents=["TadA8e"],
+                                  residues=(57, 58, 59),
+                                  atom_names=constants.BACKBONE_ATOMS)
+    assert rmsd["TadA8e"] == pytest.approx(0.0, abs=1e-6)
+
+
 def test_score_baseline_rmsd_returns_nothing_when_no_fold_exists(tmp_path):
     """A parent with no CIF on disk yet must be absent, not a fabricated 0 --
     `read_baseline`'s `require=` is the place that enforces presence."""
@@ -200,7 +241,9 @@ def test_main_score_only_never_invokes_fold_many_and_writes_the_summary(tmp_path
     assert rc == 0
     summary = (baseline_dir / "baseline_summary.tsv").read_text()
     assert "core_motif_rmsd" in summary
+    assert "core_motif_rmsd_backbone" in summary
     for parent in constants.PARENTS:
         assert parent in summary
     prov = json.load(open(baseline_dir / "reference_baseline.provenance.json"))
     assert set(prov["extra"]["core_motif_rmsd"]) == set(constants.PARENTS)
+    assert set(prov["extra"]["core_motif_rmsd_backbone"]) == set(constants.PARENTS)
