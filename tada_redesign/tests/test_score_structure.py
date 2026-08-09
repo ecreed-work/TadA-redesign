@@ -21,6 +21,23 @@ def _synthetic_atoms(n_res=6, seed=0):
     return atoms
 
 
+def _synthetic_backbone_atoms(n_res=6, seed=0, sidechain_name="CB"):
+    """{(resnum, atom): xyz} with N/CA/C/O plus one sidechain atom per
+    residue, named `sidechain_name` -- lets a test give ref and pred DIFFERENT
+    residue identities (different sidechain atom names) while keeping an
+    identical backbone."""
+    rng = np.random.default_rng(seed)
+    atoms = {}
+    for i in range(1, n_res + 1):
+        ca = rng.normal(size=3) * 5.0
+        atoms[(i, "N")] = ca + np.array([-1.0, 0.0, 0.0])
+        atoms[(i, "CA")] = ca
+        atoms[(i, "C")] = ca + np.array([1.0, 0.0, 0.0])
+        atoms[(i, "O")] = ca + np.array([1.5, 1.0, 0.0])
+        atoms[(i, sidechain_name)] = ca + np.array([0.0, 1.5, 0.0])
+    return atoms
+
+
 def _rotation(deg=37.0):
     t = np.deg2rad(deg)
     c, s = np.cos(t), np.sin(t)
@@ -73,6 +90,44 @@ def test_motif_rmsd_raises_below_three_anchor_points():
     pred = _synthetic_atoms()
     with pytest.raises(ValueError):
         ss.motif_rmsd(ref, pred, residues=(1,), anchor_residues=(1, 2))
+
+
+def test_motif_rmsd_raises_by_default_when_sidechain_identity_differs():
+    """The MIN-arm defect this task fixes: the MIN arm freezes only 4 of
+    CORE_MOTIF's 17 residues, so LigandMPNN changes the other 13 identities
+    and the reference's sidechain atom names simply do not exist in the
+    prediction. All-heavy-atom `motif_rmsd` (the default) must still raise
+    KeyError on that -- a silently shrunk measured set would report a falsely
+    good number, exactly the failure mode `motif_rmsd`'s docstring forbids."""
+    ref = _synthetic_backbone_atoms(seed=0, sidechain_name="OG")
+    pred_local = _synthetic_backbone_atoms(seed=0, sidechain_name="CG")
+    pred = _transformed(pred_local, _rotation(51.0), np.array([-30.0, 12.0, 3.0]))
+    with pytest.raises(KeyError):
+        ss.motif_rmsd(ref, pred, residues=(2, 3, 4))
+
+
+def test_motif_rmsd_with_backbone_atom_names_scores_despite_differing_sidechain_identity():
+    """The fix: `atom_names=constants.BACKBONE_ATOMS` measures only N/CA/C/O,
+    which exist in both structures regardless of residue identity, so a
+    design with 13 changed sidechains now SCORES instead of raising."""
+    ref = _synthetic_backbone_atoms(seed=0, sidechain_name="OG")
+    pred_local = _synthetic_backbone_atoms(seed=0, sidechain_name="CG")
+    pred = _transformed(pred_local, _rotation(51.0), np.array([-30.0, 12.0, 3.0]))
+    rmsd = ss.motif_rmsd(ref, pred, residues=(2, 3, 4),
+                         atom_names=constants.BACKBONE_ATOMS)
+    assert rmsd == pytest.approx(0.0, abs=1e-8)
+
+
+def test_motif_rmsd_with_backbone_atom_names_still_raises_on_a_missing_backbone_atom():
+    """Backbone atoms are present in every complete model, so a missing one is
+    a broken structure, not a design choice -- the loud failure must not be
+    softened to a skip even under the `atom_names` filter."""
+    ref = _synthetic_backbone_atoms(seed=0)
+    pred = _synthetic_backbone_atoms(seed=0)
+    del pred[(3, "CA")]
+    with pytest.raises(KeyError):
+        ss.motif_rmsd(ref, pred, residues=(2, 3, 4),
+                      atom_names=constants.BACKBONE_ATOMS)
 
 
 def test_anchor_refinement_excludes_a_flapping_tail_from_the_fit():

@@ -278,17 +278,30 @@ def _anchor_arrays(ref_atoms, pred_atoms, anchor_residues):
     return P[idx], Q[idx]
 
 
-def motif_rmsd(ref_atoms, pred_atoms, residues, anchor_residues=None):
+def motif_rmsd(ref_atoms, pred_atoms, residues, anchor_residues=None,
+              atom_names=None):
     """Heavy-atom RMSD (A) over `residues`, after CA superposition.
 
-    Raises `KeyError` if any atom of a measured residue is missing from either
-    structure -- a silently shrunk measured set would report a falsely good
-    number on a broken design.
+    `atom_names`, if given, restricts the measured atoms at each residue to
+    that set (e.g. `constants.BACKBONE_ATOMS`) instead of every heavy atom.
+    Default `None` is unchanged: every heavy atom present in the reference,
+    identical to every existing caller's behaviour (`filter_backbones.py`'s
+    RFdiffusion-backbone gate in particular must not change).
+
+    Raises `KeyError` if any REQUESTED atom of a measured residue is missing
+    from either structure -- a silently shrunk measured set would report a
+    falsely good number on a broken design. This still applies under
+    `atom_names`: backbone atoms (N/CA/C/O) are present in every complete
+    model, so a missing one means a broken structure, not a design choice,
+    and must fail loudly rather than being skipped.
     """
     P, Q = _anchor_arrays(ref_atoms, pred_atoms, anchor_residues)
     R, P_mean, Q_mean = kabsch(P, Q)
 
     keys = sorted(k for k in ref_atoms if k[0] in set(residues))
+    if atom_names is not None:
+        names = set(atom_names)
+        keys = [k for k in keys if k[1] in names]
     if not keys:
         raise KeyError(f"no reference atoms for residues {tuple(residues)}")
     missing = [k for k in keys if k not in pred_atoms]
