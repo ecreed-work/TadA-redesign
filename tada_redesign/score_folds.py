@@ -77,7 +77,15 @@ def score_one(cif_path, metrics_path, ref_atoms, residues, substrate_xyz):
     try:
         atoms = score_structure.heavy_atoms_from_cif(cif_path)
         atoms = score_structure.align_numbering(ref_atoms, atoms)
-        out["motif_rmsd"] = score_structure.motif_rmsd(ref_atoms, atoms, residues)
+        # BACKBONE atoms only. Measuring all heavy atoms made every MIN-arm
+        # design unscorable: MIN freezes 4 of CORE's 17 residues, so LigandMPNN
+        # redesigned the other 13 and the reference's sidechain atoms do not
+        # exist in the prediction -- `motif_rmsd` then raises (correctly; a
+        # silently shrunk measured set would report a falsely good number).
+        # 5,166 of 10,542 designs died that way on the 2026-08-09 run. N/CA/C/O
+        # are identity-independent, so both arms score and compare directly.
+        out["motif_rmsd"] = score_structure.motif_rmsd(
+            ref_atoms, atoms, residues, atom_names=constants.BACKBONE_ATOMS)
         out["cleft_clearance"] = score_structure.cleft_clearance(
             ref_atoms, atoms, substrate_xyz)
     except Exception as exc:                 # noqa: BLE001 - one bad fold must
