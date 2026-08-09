@@ -129,28 +129,47 @@ def test_shard_count_reflects_load_dominated_cost():
 
 
 def test_motif_threshold_exceeds_the_parents_own_offset_and_jitter():
-    """SUPERSEDED 2026-08-08 (Task 3b): the 1.468 A figure this test used to cite
-    came from a side-script that folded with a non-default `--seed`, not from
-    `reference_baseline.py`'s production path -- it was never reproducible
-    through the code the campaign actually runs. Re-measured through the
-    fixed, iteratively-refined anchor (`constants.ANCHOR_OUTLIER_CUTOFF`) via
-    the actual production path (baseline job 238437): parent vs crystal, CORE
-    = TadA8e 1.354 A, TadA9 1.357 A. Floor = max(1.354, 1.357) + 0.563 (given
-    fold-to-fold jitter, not re-derived here) = 1.920 A. A threshold below that
-    floor rejects the unmodified parent and is meaningless.
-    MOTIF_RMSD_MAX = 2.0 sits one tick above the floor -- per the repo owner's
-    2026-08-08 ruling this gate is now a gross-failure catch, not a ranking
-    metric: the entire 21-probe distribution (min 1.296, max 1.713) sits
-    inside the parent's own fold-to-fold jitter band, so no cutoff above the
-    floor could discriminate among them."""
-    floor = max(1.354, 1.357) + 0.563
+    """SUPERSEDED 2026-08-08 (Task 3b): the 1.468 A figure this test used to
+    cite came from a side-script that folded with a non-default `--seed`, not
+    from `reference_baseline.py`'s production path -- it was never
+    reproducible through the code the campaign actually runs. Re-measured
+    through the fixed, iteratively-refined anchor
+    (`constants.ANCHOR_OUTLIER_CUTOFF`) via the actual production path
+    (baseline job 238437): parent vs crystal, CORE = TadA8e 1.354 A, TadA9
+    1.357 A. Floor = max(1.354, 1.357) + 0.563 (given fold-to-fold jitter, not
+    re-derived here) = 1.920 A. MOTIF_RMSD_MAX = 2.0 sat one tick above that
+    floor.
+
+    SUPERSEDED AGAIN 2026-08-09 (docs/plans/2026-08-09-backbone-core-metric.md):
+    the 2.0 A value above was calibrated against ALL-HEAVY-ATOM CORE RMSD,
+    which requires every one of CORE's 17 residues to keep its reference
+    identity. The full 10,542-design run showed the MIN arm never satisfies
+    that -- it freezes only 4 of the 17, so LigandMPNN changes the other 13
+    identities and every one of 5,166 MIN designs (100%) raised KeyError
+    rather than scoring. The fix: measure BACKBONE atoms only (N/CA/C/O,
+    `constants.BACKBONE_ATOMS`), identity-independent so both arms score.
+    Backbone-only RMSD is systematically smaller, so the threshold is
+    re-derived from measurement on the SAME inputs (`reference_baseline.
+    score_baseline_rmsd(atom_names=BACKBONE_ATOMS)`, and the same 5
+    `scatter_full/seed{1..5}` TadA8e replicates the retired 0.563 A jitter
+    figure came from): parent vs crystal, CORE, backbone-only = TadA8e
+    0.7348 A, TadA9 0.6464 A. Fold-to-fold jitter, backbone-only = median
+    0.2135 A (10 pairs, 0.1262-0.3498 A). Floor = max(0.7348, 0.6464) +
+    0.2135 = 0.9483 A. A threshold below that floor rejects the unmodified
+    parent and is meaningless.
+    MOTIF_RMSD_MAX = 1.0 sits one tick above the floor -- the same margin
+    convention as the superseded 2.0 A derivation. Per the repo owner's
+    2026-08-08 ruling this gate remains a gross-failure catch, not a ranking
+    metric: the 21 probe designs re-measured backbone-only span 0.6850-
+    1.2181 A, still comfortably inside this floor's headroom."""
+    floor = max(0.7348, 0.6464) + 0.2135
     assert constants.MOTIF_RMSD_MAX > floor
     # Floor-bound alone lets MOTIF_RMSD_MAX drift arbitrarily high (e.g. 50.0)
     # while still passing -- and the unbounded direction is exactly the
     # flattering one for a gate whose job is to REJECT gross failures. Pin the
     # measured, derived value exactly; if it ever needs to change, this test
     # must be edited deliberately, not silently satisfied by a loose bound.
-    assert constants.MOTIF_RMSD_MAX == 2.0
+    assert constants.MOTIF_RMSD_MAX == 1.0
 
 
 def test_anchor_constants_are_pinned_to_their_measured_values():

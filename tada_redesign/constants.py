@@ -54,6 +54,15 @@ SUBSTRATE_CHAIN = "D"
 SUBSTRATE_RESID = 26
 SUBSTRATE_RESNAME = "8AZ"   # 8-azanebularine target-base analogue
 
+# Backbone-only atom set for `score_structure.motif_rmsd(atom_names=...)`.
+# Identity-independent (unlike all-heavy-atom RMSD), so it scores BOTH design
+# arms: the MIN arm freezes only the 4 CATALYTIC residues of CORE_MOTIF's 17,
+# so LigandMPNN changes the other 13 identities and the reference's sidechain
+# atoms simply do not exist in a MIN prediction -- every MIN design raised
+# KeyError under the old all-heavy-atom measurement (docs/plans/2026-08-09-
+# backbone-core-metric.md).
+BACKBONE_ATOMS = ("N", "CA", "C", "O")
+
 # ---------------------------------------------------------------- sweep axes
 ARMS = ("FULL", "MIN")
 
@@ -153,9 +162,45 @@ ANCHOR_MIN_RETAINED_FRAC = 0.60
 # ESMFold2 cannot resolve design-vs-parent differences at the CORE site;
 # real discrimination is deferred to the stability stage.
 #
+# SUPERSEDED 2026-08-09 (docs/plans/2026-08-09-backbone-core-metric.md): the
+# 2.0 A value above was derived from ALL-HEAVY-ATOM CORE RMSD, which requires
+# every one of the 17 CORE residues to keep its reference identity. The
+# 10,542-design production run (job 238484) showed this is exactly what the
+# MIN arm does not do -- MIN freezes only the 4 CATALYTIC residues of CORE's
+# 17, LigandMPNN changes the other 13 identities, and the reference's
+# sidechain atoms for those 13 do not exist in a MIN prediction. Every one of
+# 5,166 MIN designs (100%) raised KeyError and landed in `unscorable`. The
+# fix (repo owner's decision): measure BACKBONE atoms only
+# (`BACKBONE_ATOMS`, N/CA/C/O) at the same 17 CORE residues --
+# identity-independent, so both arms become scorable and directly
+# comparable. Backbone-only RMSD is systematically smaller than
+# all-heavy-atom RMSD, so 2.0 A (calibrated against the retired metric) does
+# not carry over; re-deriving it exactly as before, on the SAME inputs, is
+# what stops this from being the third repair round for a threshold
+# calibrated against a metric that no longer means the same thing.
+#
+# Re-derived 2026-08-09, backbone-only CORE RMSD, through the same
+# production code path (`reference_baseline.score_baseline_rmsd(atom_names=
+# BACKBONE_ATOMS)`; jitter from the same 5 `scatter_full/seed{1..5}` TadA8e
+# replicates, 10 pairwise combinations, as the retired 0.563 A figure):
+#   parent vs crystal, CORE, backbone-only: TadA8e 0.7348 A, TadA9 0.6464 A
+#   fold-to-fold jitter, backbone-only: median 0.2135 A (10 pairs,
+#   0.1262-0.3498 A)
+#   floor = max(0.7348, 0.6464) + 0.2135 = 0.9483 A
+#   MOTIF_RMSD_MAX = 1.0 A -- one tick above the floor, mirroring the prior
+#   derivation's margin. (Coincides numerically with the unrelated
+#   BACKBONE_MOTIF_RMSD_MAX=1.0 used by filter_backbones.py against the
+#   RFdiffusion-backbone gate -- a coincidence of two independent
+#   derivations, not a shared meaning; the two constants gate different
+#   pipeline stages against different reference distributions.)
+# The 21 probe designs re-measured backbone-only: min 0.6850  max 1.2181 A
+# (vs 1.2961-1.7133 A all-heavy-atom on the identical structures) -- lower
+# across the board, as expected, and still a gross-failure catch rather than
+# a ranking metric per the 2026-08-08 ruling.
+#
 # Honesty ceiling: motif RMSD measures geometry and pLDDT measures model
 # confidence. Neither is stability, solubility, or enzymatic activity.
-MOTIF_RMSD_MAX = 2.0
+MOTIF_RMSD_MAX = 1.0
 PLDDT_MARGIN = 0.05              # 0-1 scale (ESMFold2 reports 0-1, not 0-100)
 # The two folding models do NOT share a pLDDT scale: ESMFold2 reports 0-1,
 # AF3 reports 0-100. PLDDT_MARGIN is expressed on ESMFold2's scale; any AF3
