@@ -18,12 +18,25 @@ Three deliberate choices:
     test silently admits broken measurements -- the exact shape of the defect
     that turned every Zn distance into nan in Part 2.
 
-CAVEAT ON THE PASS RATE THIS MODULE PRINTS/RECORDS (2026-08-08 ruling): with
-the entire 21-probe CORE distribution sitting inside the parent's own
-fold-to-fold jitter band (see constants.MOTIF_RMSD_MAX), `MOTIF_RMSD_MAX` is a
-GROSS-FAILURE catch, not a ranking metric. A pass rate near 100% is therefore
-an expected consequence of that re-role, not evidence the designs are good --
-it reads a design's core as "not obviously collapsed," nothing stronger.
+CAVEAT ON THE PASS RATE THIS MODULE PRINTS/RECORDS (2026-08-09 correction,
+superseding the 2026-08-08 ruling below): the 2026-08-08 claim that
+`MOTIF_RMSD_MAX` is a "gross-failure catch, not a ranking metric" and that "a
+near-100% pass rate is expected" was inferred from 21 probe designs that all
+came from a single cell (`TadA8e_FULL_pt1.0`, the easiest of sixteen). The full
+10,542-design screen falsifies it: the gate discriminates strongly and by
+design (dose-response over re-noising, FULL-arm pt1.0 65.6% down to pt6.0
+0.7% on the all-heavy-atom run; 58.6% down to 0.1% on the current
+backbone-only run). Do not predict a pass rate here -- state the one this run
+measured. See docs/logs/20260809_backbone_core_metric.md for the full
+sampling-error post-mortem and the corrected numbers.
+
+[SUPERSEDED 2026-08-08 text, kept for the record -- refuted by the full run
+above] "with the entire 21-probe CORE distribution sitting inside the
+parent's own fold-to-fold jitter band (see constants.MOTIF_RMSD_MAX),
+`MOTIF_RMSD_MAX` is a GROSS-FAILURE catch, not a ranking metric. A pass rate
+near 100% is therefore an expected consequence of that re-role, not evidence
+the designs are good -- it reads a design's core as 'not obviously
+collapsed,' nothing stronger."
 
 Honesty ceiling: pLDDT is model confidence and motif RMSD is geometry. Neither is
 stability, solubility, or activity.
@@ -135,9 +148,10 @@ def main(argv=None):
             "status": status, "passed": str(bool(passed)),
         }, COLUMNS)
 
-    print(f"[score_folds] {n_pass}/{len(designs)} passed -> {out_path} "
-          f"(MOTIF_RMSD_MAX is a gross-failure catch, not a ranking metric -- "
-          f"a near-100% pass rate is expected, not a quality result)")
+    print(f"[score_folds] {n_pass}/{len(designs)} passed "
+          f"({n_pass / float(len(designs)):.1%}) -> {out_path} "
+          f"(MOTIF_RMSD_MAX discriminates -- rate is measured per run, not "
+          f"predicted; see docs/logs/20260809_backbone_core_metric.md)")
     # Every design produced a row (score_one never raises), so the degraded gate
     # compares rows WRITTEN to inputs and cannot trip here. A low PASS rate is a
     # measurement, not a stage failure -- the correction an earlier review

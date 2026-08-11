@@ -314,9 +314,13 @@ reference diverge freely, and that divergence dominated the metric.
   > must be re-verified, not assumed, if that function changes again.) Cross-reference:
   > "Backbone filter caveat" below.
   >
-  > **Net effect on this stage's gates**: with motif RMSD re-roled as a gross-failure catch
-  > (not a ranking metric, see below) and cleft clearance not wired into `gate()` at all,
-  > the fold stage currently has **one working geometric gate** (motif RMSD), not two.
+  > **Net effect on this stage's gates**: ~~with motif RMSD re-roled as a gross-failure
+  > catch (not a ranking metric, see below)~~ **[SUPERSEDED 2026-08-09 — see the
+  > correction below "The central finding": the gate discriminates strongly; that
+  > premise was wrong]** and cleft clearance not wired into `gate()` at all, the fold
+  > stage currently has **one working geometric gate** (motif RMSD), not two. The
+  > "not wired into `gate()`" half of this sentence is unaffected by the 2026-08-09
+  > correction and remains true.
 
   Measured on the committed references (Zn excluded; see the anchor-provenance caveat above):
   crystal `chainF_raw.pdb` vs
@@ -392,15 +396,105 @@ control (a fixed CA 5–150 span, excluding the tail by construction) to within 
 > 1.3568 Å** exactly. These numbers are now reproducible from committed code
 > (`python -m tada_redesign.reference_baseline --score-only`), not from a side-script.
 
-**The central finding, stated plainly — this is not a success story.** With the
+**The central finding, stated plainly — this is not a success story.** ~~With the
 corrected anchor, the 21 designs span 1.30–1.71 Å against a parent measuring 1.35 Å with
-a 0.563 Å fold-to-fold jitter. **The frozen motif worked — the CORE site is preserved in
+a 0.563 Å fold-to-fold jitter. The frozen motif worked — the CORE site is preserved in
 all 21 — but ESMFold2 cannot resolve a design-from-parent difference at the active
-site.** Motif RMSD is therefore re-roled as a **gross-failure catch, not a ranking
+site. Motif RMSD is therefore re-roled as a **gross-failure catch, not a ranking
 metric** (repo owner's ruling, 2026-08-08): a design whose core has genuinely collapsed
 will still fail this gate, but a passing score says nothing about whether a design is
 better, worse, or different from its parent. Real discrimination between designs must
-come from the deferred stability stage (Rosetta Δ, Stage 4), not from this geometry gate.
+come from the deferred stability stage (Rosetta Δ, Stage 4), not from this geometry
+gate.~~
+
+> **CORRECTION 2026-08-09 (repo owner's ruling — supersedes the 2026-08-08 ruling
+> immediately above, kept struck through, not deleted).**
+>
+> **Error 1 — a wrong prediction from a biased sample.** All 21 probe designs came
+> from a single cell, `TadA8e_FULL_pt1.0` — the easiest of sixteen cells in the design
+> matrix (full motif frozen, the lowest re-noising level, one parent). The full
+> 10,542-design screen (fold job 238450, score job 238484) falsifies the "near-100%
+> expected, not a quality result" prediction: **the gate discriminates strongly.** Even
+> `TadA8e_FULL_pt1.0`'s own cell passes at 65.6% (881/1344), not 21/21 — the probe draw
+> was unrepresentative within its own cell, not only across cells.
+>
+> **Error 2 — the measured set was incompatible with half the design arms.** The same
+> run exposed a second, independent defect: **all 5,166 `MIN`-arm designs — 100% of
+> them — landed in `unscorable`.** `CORE_MOTIF`'s 17 residues were measured as *all
+> heavy atoms*, but `MIN` freezes only 4 of them; LigandMPNN redesigned the other 13,
+> so the reference's sidechain atoms do not exist in the `MIN`-arm predictions and
+> `motif_rmsd` correctly raised rather than silently reporting a falsely good number
+> over a shrunk measured set. This made `FULL` and `MIN` incomparable, not merely
+> noisy.
+>
+> **Fix** (`tada_redesign/score_folds.py`, `score_structure.py`, `constants.py`; see
+> `docs/plans/2026-08-09-backbone-core-metric.md`): measure CORE as **backbone atoms
+> only** (N/CA/C/O, `constants.BACKBONE_ATOMS`) instead of all heavy atoms. This is
+> identity-independent, so both arms score. Sidechain rotamer quality is deferred to
+> the Rosetta stage (Stage 4), not measured here.
+>
+> **Threshold re-derived, not carried over** — backbone RMSD is systematically smaller
+> than all-heavy-atom RMSD, so keeping `2.0 Å` would repeat the exact defect that
+> produced this correction (a threshold calibrated against a metric that no longer
+> means the same thing):
+>
+> | Quantity | All heavy atoms (2026-08-08, retired) | Backbone-only (2026-08-09, current) |
+> |---|---|---|
+> | Parents vs crystal, CORE | TadA8e 1.3542 Å, TadA9 1.3568 Å | TadA8e **0.7348 Å**, TadA9 **0.6464 Å** |
+> | Fold-to-fold jitter, median (10 pairs, same 5 `scatter_full/seed{1..5}` replicates) | 0.5486 Å on re-measurement (retired figure recorded 0.563 Å — a ~2.5% drift through the identical code path, recorded rather than papered over) | **0.2135 Å** (range 0.1262–0.3498) |
+> | Floor → `MOTIF_RMSD_MAX` | 1.920 Å → **2.0 Å** | 0.9483 Å → **1.0 Å** |
+>
+> `MOTIF_RMSD_MAX = 1.0 Å` numerically coincides with the pre-existing, unrelated
+> `BACKBONE_MOTIF_RMSD_MAX = 1.0 Å` (`filter_backbones.py`'s RFdiffusion-backbone gate,
+> a different reference distribution, see "Backbone filter caveat" below) — a
+> coincidence, not a shared meaning.
+>
+> **Full 10,542-design results, backbone-only metric (job 238496):**
+>
+> | | All heavy atoms (superseded, job 238484) | Backbone-only (current, job 238496) |
+> |---|---|---|
+> | Overall pass | 1,375/10,542 (13.0%) | **2,517/10,542 (23.9%)** |
+> | Status breakdown | ok 1375, low_plddt 3621, motif_drift 380, **unscorable 5166** | ok 2517, low_plddt 6338, motif_drift 1687, **unscorable 0** |
+>
+> | partial_t | FULL, all-heavy (retired) | FULL, backbone (current) | MIN, backbone (current) |
+> |---|---|---|---|
+> | 1.0 | 881/1344 (65.6%) | 787/1344 (58.6%) | 1016/1344 (75.6%) |
+> | 2.0 | 418/1344 (31.1%) | 371/1344 (27.6%) | 280/1344 (20.8%) |
+> | 4.0 | 66/1344 (4.9%) | 39/1344 (2.9%) | 22/1344 (1.6%) |
+> | 6.0 | 10/1344 (0.7%) | 2/1344 (0.1%) | 0/1134 (0.0%) |
+>
+> By arm (backbone-only): FULL 5,376 designs, 1,199 passed (22.3%), median RMSD
+> 1.359 Å, low_plddt 3621, motif_drift 556. MIN 5,166 designs, 1,318 passed (25.5%),
+> median RMSD 1.444 Å, low_plddt 2717, motif_drift 1131.
+>
+> **Findings, stated as results, not asides:**
+> 1. A clean monotonic dose-response in re-noising, in both arms. `pt6.0` is
+>    effectively dead (2 of 2,478 designs across both arms) — that bounds the
+>    protocol's usable re-noising range.
+> 2. `MIN` and `FULL` are now comparable, and `MIN` is not worse: 25.5% vs 22.3% pass,
+>    median RMSD 1.444 vs 1.359 Å. Freezing only the 4 catalytic residues preserves
+>    CORE backbone geometry nearly as well as freezing all 17. At `pt1.0`, `MIN` passes
+>    MORE (75.6% vs 58.6%) and, by arm overall, has FEWER low-pLDDT rejections than
+>    `FULL` (2717 vs 3621) — consistent with, but not proof of, LigandMPNN finding
+>    better-folding sequences when given more design freedom. Presented as an
+>    observation with a plausible mechanism, not a proven one.
+> 3. pLDDT is the dominant filter (6,338 rejections vs 1,687 motif drift): fold
+>    confidence, not active-site geometry, does most of the selecting.
+>
+> **Honesty ceiling, restated for the new metric.** Backbone-only RMSD measures
+> whether the CORE backbone geometry is preserved; it says nothing about sidechain
+> rotamer quality (deferred to Rosetta), stability, solubility, or enzymatic activity.
+> pLDDT is model confidence, not a physical measurement. No wet-lab validation has been
+> performed; **2,517 designs passing this geometry-and-confidence screen is not
+> evidence any of them are stable or active.**
+>
+> Fold-screen provenance: job 238450, 11 shards, all COMPLETED ~55 min each,
+> 10,542/10,542 folded, zero per-design failures. Before submitting it, 21 stale
+> reduced-sampling folds were found already sitting in `fold_screen/` and moved to
+> `retired_20260809_reduced_sampling_shard001/`, so `--skip-existing` could not
+> silently adopt them at retired settings. Full detail and the sampling-error
+> post-mortem: `docs/logs/20260809_backbone_core_metric.md`,
+> `docs/plans/2026-08-09-backbone-core-metric.md`.
 
 **Backbone filter caveat (`filter_backbones.py`, `BACKBONE_MOTIF_RMSD_MAX = 1.0 Å`).**
 That gate had already run against the unfixed anchor: 502/512 backbones passed.
@@ -418,9 +512,9 @@ Full detail, including the per-cutoff measurement table: `constants.py`'s
 `ANCHOR_OUTLIER_CUTOFF`/`MOTIF_RMSD_MAX` comments and
 `docs/plans/2026-08-06-tada-redesign-part3a-gatefix.md` ("Correction, 2026-08-08").
 
-### Stage 4 — Rosetta (~~survivors~~ 2026-08-08: nearly all 10,542, see below)
+### Stage 4 — Rosetta (~~survivors~~ 2026-08-08: nearly all 10,542, see below — 2026-08-09: 2,517 survivors, see below)
 
-> **CORRECTION 2026-08-08 (final-review fix).** "survivors" and the "~2,000 designs"
+> **CORRECTION 2026-08-08 (final-review fix).** ~~"survivors" and the "~2,000 designs"
 > compute budget below both inherit from the retired two-tier screen, where a ~1.5 Å
 > gate on reduced-sampling folds was expected to reject most designs before the
 > expensive full-sampling/Rosetta stages. That premise is gone: at the current
@@ -429,7 +523,15 @@ Full detail, including the per-cutoff measurement table: `constants.py`'s
 > designs** (the full fold-stage population), not ~2,000 — a **~5×** miss versus the
 > budget below. This follows directly from the gate no longer being selective (see
 > "The central finding" above), not from a new measurement of the full 10,542-design
-> fold; stated as a projection, not a re-derived compute number.
+> fold; stated as a projection, not a re-derived compute number.~~
+>
+> **CORRECTION 2026-08-09 (supersedes the projection immediately above with a
+> measurement).** The "gate no longer being selective" premise was itself wrong (see
+> "The central finding" above — 21/21 came from one biased cell) and is now moot: the
+> backbone-only metric's full-population score (job 238496) measures **2,517/10,542
+> (23.9%)** passing, not a projected ~10,542. Stage 4's real input is **2,517
+> designs**, not ~10,542 and not the original ~2,000 either — none of the three prior
+> numbers for this stage's input were both measured and current at the same time.
 
 Relax each survivor's full-sampling model with explicit Zn constraints; both parents
 travel the **identical** ESMFold2→relax path. Comparing a designed *prediction*
@@ -555,8 +657,8 @@ by measured values before any batch is submitted.
 | RFD3 partial | 16 cells × 32 backbones | `gpu`, 1×H100 per cell, array of 16 |
 | LigandMPNN | 512 backbones × 4 temps | `gpu`, 1×H100; `denovo_tada` measured ~1 h per 64 backbones per temperature sweep, so this stage shards by backbone |
 | ~~ESMFold2 screen~~ | ~~10,752 folds, reduced sampling~~ — **SUPERSEDED 2026-08-06**, see Stage 3: reduced sampling's 2.020 Å parent-vs-parent noise floor at the core (vs. 0.563 Å full) made it unusable as a gate, not merely noisier | — |
-| ESMFold2, single full-sampling tier | 10,542 designs (production run `20260806_tada_redesign_gen1`; 210 short of the spec's 10,752 due to per-cell yield, not truncation) folded once each, `num_loops=20`/`num_sampling_steps=100` | `gpu`, sharded array, `FOLD_SHARDS = 11` × `FOLD_BATCH_SIZE = 1000` (44×250 in the original plan; each shard pays the ESMFold2 model-load cost once, so fewer/larger shards cut load overhead from ~29 GPU-h to ~7.3 GPU-h under contention) — measured ~11.5 GPU-hours of folding. **The full 11-shard screen has NOT been submitted**; only a 21-design debug shard (`gatefix_probe`) has run. |
-| Rosetta | ~~~2,000 designs × 3 replicates~~ — **CORRECTED 2026-08-08**: that figure assumed the retired two-tier screen would reject most designs before this stage; at the current gate's measured 21/21 pass rate the honest projection is **~10,542 designs × 3 replicates** (~5× the original budget) | `gpu` partition **without** `--gres`, CPU-only array |
+| ESMFold2, single full-sampling tier | 10,542 designs (production run `20260806_tada_redesign_gen1`; 210 short of the spec's 10,752 due to per-cell yield, not truncation) folded once each, `num_loops=20`/`num_sampling_steps=100` | `gpu`, sharded array, `FOLD_SHARDS = 11` × `FOLD_BATCH_SIZE = 1000` (44×250 in the original plan; each shard pays the ESMFold2 model-load cost once, so fewer/larger shards cut load overhead from ~29 GPU-h to ~7.3 GPU-h under contention) — measured ~11.5 GPU-hours of folding. ~~**The full 11-shard screen has NOT been submitted**; only a 21-design debug shard (`gatefix_probe`) has run.~~ **UPDATED 2026-08-09: it has** — job 238450, 11 shards, all COMPLETED ~55 min each, 10,542/10,542 folded, zero per-design failures. |
+| Rosetta | ~~~2,000 designs × 3 replicates~~ — ~~**CORRECTED 2026-08-08**: that figure assumed the retired two-tier screen would reject most designs before this stage; at the current gate's measured 21/21 pass rate the honest projection is **~10,542 designs × 3 replicates** (~5× the original budget)~~ — **CORRECTED AGAIN 2026-08-09**: the 21/21 pass rate that projection relied on was a biased-sample artifact (see "The central finding" correction above). The full-population, backbone-only measurement (job 238496) is **2,517 designs × 3 replicates** | `gpu` partition **without** `--gres`, CPU-only array |
 | AF3 | ~300 single-sequence + ligand | `gpu`, 1×H100, array |
 
 ## Repository mechanics
